@@ -1,0 +1,91 @@
+namespace PromptDC;
+
+// Native integration test: real global hotkey -> Ctrl+C -> fake model -> Ctrl+V.
+// Runs only in its own test window; never touches another app's text fields.
+internal sealed class SmokeTests : Form
+{
+    private readonly RichTextBox editor = new() { Dock = DockStyle.Fill };
+    private readonly InputGuard guard = new();
+    private readonly List<object> results = [];
+    private Func<Task>? hotkeyAction;
+    private SmokeTests()
+    {
+        Text = "PromptDC 本机选区测试"; ClientSize = new Size(620, 260);
+        StartPosition = FormStartPosition.CenterScreen; Controls.Add(editor);
+        Shown += async (_, _) => await Execute();
+    }
+    public static void Run() { using var form = new SmokeTests(); Application.Run(form); }
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == 0x312 && (int)m.WParam == Native.HotkeyId && hotkeyAction != null) _ = hotkeyAction();
+        base.WndProc(ref m);
+    }
+    private async Task Execute()
+    {
+        var backup = Clipboard.GetDataObject();
+        try
+        {
+            var focusDeadline = Environment.TickCount64 + 60000;
+            while (Native.GetForegroundWindow() != Handle && Environment.TickCount64 < focusDeadline)
+                await Task.Delay(150);
+            var parsed = Native.ParseHotkey("Ctrl+Alt+E");
+            SelfTests.Assert(Native.RegisterHotKey(Handle, Native.HotkeyId, parsed.Modifiers, parsed.Key), "hotkey already occupied");
+            await Check("global hotkey replaces only selected Unicode text and restores clipboard", async () =>
+            {
+                await Prepare();
+                Clipboard.SetText("clipboard-before-test");
+                var completion = new TaskCompletionSource<EnhancementResult>();
+                hotkeyAction = async () =>
+                {
+                    try { completion.SetResult(await new SelectionEnhancer(guard).RunAsync(async (text, token) => { SelfTests.Assert(text == "优化这段代码", "wrong selection"); await Task.Delay(100, token); return "请优化这段代码，保持现有行为。"; }, _ => { }, default)); }
+                    catch (Exception e) { completion.SetException(e); }
+                };
+                Native.Chord(0x11, 0x12, 0x45);
+                var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                SelfTests.Assert(result.Replaced && editor.Text == "前缀 请优化这段代码，保持现有行为。 后缀", "wrong replacement");
+                SelfTests.Assert(Clipboard.GetText() == "clipboard-before-test", "clipboard not restored");
+                editor.Undo();
+                SelfTests.Assert(editor.Text == "前缀 优化这段代码 后缀", "undo failed");
+            });
+            await Check("changed selection retains result without replacing", async () =>
+            {
+                await Prepare();
+                var result = await new SelectionEnhancer(guard).RunAsync(async (_, token) => { editor.Select(0, 2); await Task.Delay(100, token); return "增强内容"; }, _ => { }, default);
+                SelfTests.Assert(!result.Replaced && result.Enhanced == "增强内容" && editor.Text == "前缀 优化这段代码 后缀", "stale selection overwritten");
+            });
+            await Check("focus switch retains result without replacing", async () =>
+            {
+                await Prepare();
+                using var other = new Form { Text = "PromptDC test focus target", Size = new Size(300, 120) };
+                var result = await new SelectionEnhancer(guard).RunAsync(async (_, token) => { other.Show(); other.Activate(); await Task.Delay(150, token); return "增强内容"; }, _ => { }, default);
+                SelfTests.Assert(!result.Replaced && editor.Text == "前缀 优化这段代码 后缀", "focus guard failed");
+            });
+            await Check("API failure preserves source and clipboard", async () =>
+            {
+                await Prepare(); Clipboard.SetText("failure-clipboard");
+                try { await new SelectionEnhancer(guard).RunAsync((_, _) => throw new InvalidOperationException("mock API failure"), _ => { }, default); throw new Exception("failure not propagated"); }
+                catch (InvalidOperationException e) { SelfTests.Assert(e.Message == "mock API failure", "unexpected error"); }
+                SelfTests.Assert(editor.Text == "前缀 优化这段代码 后缀" && Clipboard.GetText() == "failure-clipboard", "source or clipboard lost");
+            });
+        }
+        catch (Exception e) { results.Add(new { name = "setup", passed = false, error = e.ToString() }); Environment.ExitCode = 1; }
+        finally
+        {
+            Native.UnregisterHotKey(Handle, Native.HotkeyId); guard.Dispose();
+            if (backup != null) Clipboard.SetDataObject(backup, true); else Clipboard.Clear();
+            SelfTests.WriteReport("smoke-tests.json", results); Close();
+        }
+    }
+    private async Task Prepare()
+    {
+        Activate(); Native.SetForegroundWindow(Handle); editor.Focus();
+        editor.Text = "前缀 优化这段代码 后缀"; editor.Select(3, "优化这段代码".Length);
+        await Task.Delay(220);
+        SelfTests.Assert(Native.GetForegroundWindow() == Handle, "test window not in foreground");
+    }
+    private async Task Check(string name, Func<Task> test)
+    {
+        try { await test(); results.Add(new { name, passed = true, error = "" }); }
+        catch (Exception e) { results.Add(new { name, passed = false, error = e.Message }); Environment.ExitCode = 1; }
+    }
+}

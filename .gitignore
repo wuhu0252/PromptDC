@@ -1,0 +1,38 @@
+# Build output and dependencies
+bin/
+obj/
+dist/
+publish/
+node_modules/
+packages/
+
+# IDE and user-specific files
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local credentials and runtime settings (including encrypted keys)
+.env
+.env.*
+!.env.example
+settings.json
+settings.json.tmp
+appsettings.*.local.json
+secrets.json
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Test output, logs, and temporary files
+test-results/
+TestResults/
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
