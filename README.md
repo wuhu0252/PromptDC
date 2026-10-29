@@ -156,7 +156,7 @@ dotnet run -c Release -- --smoke-test
 dotnet run -c Release -- --diagnose-context
 ```
 
-测试报告写入 `test-results/`。self-test 使用模拟 HTTP 接口；smoke-test 会弹出自己的测试窗口，使用独立快捷键 `Ctrl+Alt+Shift+9` 验证实际快捷键、选区复制、替换、撤销、焦点切换和失败保护，不调用真实 API。运行时请暂时不要操作键鼠；若测试快捷键被占用，请先退出占用它的程序。
+测试报告写入 `test-results/`。self-test 使用模拟 HTTP 接口；smoke-test 会弹出自己的测试窗口，使用独立快捷键 `Ctrl+Alt+9` 验证实际快捷键、选区复制、替换、撤销、焦点切换和失败保护，不调用真实 API。测试快捷键使用与默认热键相同的 Ctrl+Alt 修饰键，避免加入 Shift 后干扰输入法切换。运行时请暂时不要操作键鼠；若测试快捷键被占用，请先退出占用它的程序。
 
 `--diagnose-context` 只诊断当前前台 Codex 窗口，走与实际使用相同的独立进程定位流程，不复制/粘贴、不调用模型。报告 `test-results/context-diagnostic.json` 包含匹配结果、聊天 ID、数量和耗时等元数据，不保存聊天正文或 API Key。运行时请让目标 Codex 聊天保持在前台。
 

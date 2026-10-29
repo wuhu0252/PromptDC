@@ -4,7 +4,7 @@ namespace PromptDC;
 
 internal sealed record EnhancementResult(string Original, string Enhanced, bool Replaced);
 
-internal sealed class SelectionEnhancer(InputGuard guard)
+internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace = null)
 {
     public async Task<EnhancementResult> RunAsync(Func<string, CancellationToken, Task<string>> enhance,
         Action<string> status, CancellationToken token, Func<CancellationToken, Task<bool>>? validateContext = null)
@@ -59,6 +59,7 @@ internal sealed class SelectionEnhancer(InputGuard guard)
         var marker = "PromptDC-selection-" + Guid.NewGuid();
         Clipboard.SetText(marker);
         var ownedSequence = Native.GetClipboardSequenceNumber();
+        var markerSequence = ownedSequence;
         try
         {
             Native.Chord(0x11, 0x43);
@@ -68,13 +69,18 @@ internal sealed class SelectionEnhancer(InputGuard guard)
                 await Task.Delay(25, token);
                 if (!guard.Matches(window, epoch)) throw new InvalidOperationException("输入位置已变化。");
                 var current = Native.GetClipboardSequenceNumber();
-                if (current == ownedSequence) continue;
+                if (current == markerSequence) continue;
                 ownedSequence = current;
-                if (Clipboard.ContainsText())
+                try
                 {
-                    var text = Clipboard.GetText();
-                    if (text != marker) return text;
+                    if (Clipboard.ContainsText())
+                    {
+                        var text = Clipboard.GetText();
+                        if (text != marker) return text;
+                    }
                 }
+                catch (ExternalException e) when (e.ErrorCode == unchecked((int)0x800401D0))
+                { trace?.Invoke("copy busy: retrying read"); }
             }
             throw new InvalidOperationException("未读取到选中文字，请确认已选中输入框中的文字。管理员窗口可能无法访问。");
         }
@@ -94,22 +100,24 @@ internal sealed class SelectionEnhancer(InputGuard guard)
         return result;
     }
 
-    private static async Task RestoreClipboardAsync(DataObject previous, uint ownedSequence)
+    private async Task RestoreClipboardAsync(DataObject previous, uint ownedSequence)
     {
         for (var attempt = 0; attempt < 20; attempt++)
         {
             // Recheck on every retry: never overwrite something copied during the wait.
-            if (Native.GetClipboardSequenceNumber() != ownedSequence) return;
+            if (Native.GetClipboardSequenceNumber() != ownedSequence) { trace?.Invoke("restore skipped: sequence changed"); return; }
             try
             {
                 if (previous.GetFormats(false).Length == 0) Clipboard.Clear();
                 else Clipboard.SetDataObject(previous, true, 0, 0);
+                trace?.Invoke("restore succeeded on attempt " + attempt);
                 return;
             }
             catch (ExternalException e) when (e.ErrorCode == unchecked((int)0x800401D0))
             {
                 // Another clipboard consumer may briefly hold it open. Yield the UI thread
                 // instead of blocking it with synchronous OLE retry sleeps. Restoration is best effort.
+                trace?.Invoke("restore busy on attempt " + attempt + "; sequence changed=" + (Native.GetClipboardSequenceNumber() != ownedSequence));
                 if (attempt == 19) return;
                 await Task.Delay(50, CancellationToken.None);
             }
