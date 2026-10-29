@@ -39,6 +39,8 @@ internal static class SelfTests
             }
         });
         Check("DeepSeek request contract and Unicode output", () => ApiTest().GetAwaiter().GetResult());
+        Check("DeepSeek keeps history as data and only rewrites the last user message", () => ContextApiTest().GetAwaiter().GetResult());
+        ContextTests.Register(Check);
         foreach (var code in new[] { 401, 402, 429, 500 })
             Check("HTTP " + code + " returns friendly error without leaking server body", () =>
                 ExpectFailure(code, "server-private-data").GetAwaiter().GetResult());
@@ -80,6 +82,23 @@ internal static class SelfTests
         try { await new DeepSeekClient(http).EnhanceAsync("请优化", TestSettings(), default); }
         catch (InvalidOperationException e) { Assert(!e.Message.Contains("server-private-data"), "leaked response body"); return; }
         throw new Exception("response was accepted");
+    }
+    private static async Task ContextApiTest()
+    {
+        var handler = new StubHandler(200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"增强后的需求\"}}]}");
+        using var http = new HttpClient(handler);
+        var secret = "sk-" + new string('x', 30);
+        var context = new ChatContext("private-thread-id", "private-title", "private-project-path",
+            [new("user", "保留原有接口格式。test-only " + secret), new("assistant", "收到，不改变接口格式。")], "test");
+        await new DeepSeekClient(http).EnhanceAsync("按刚才说的修改", TestSettings(), default, context);
+        using var body = JsonDocument.Parse(handler.Body!);
+        var messages = body.RootElement.GetProperty("messages");
+        Assert(messages.GetArrayLength() == 3 && messages[2].GetProperty("content").GetString() == "按刚才说的修改", "current input not isolated");
+        using var history = JsonDocument.Parse(messages[1].GetProperty("content").GetString()!);
+        Assert(history.RootElement.GetProperty("purpose").GetString() == "conversation_context", "missing context type");
+        Assert(history.RootElement.GetProperty("workspace").GetProperty("recordedPath").GetString() == "private-project-path", "workspace identity missing");
+        Assert(!handler.Body!.Contains(secret) && !handler.Body.Contains("private-thread-id")
+            && !messages[1].GetProperty("content").GetString()!.Contains("test-only"), "unneeded metadata or credentials sent");
     }
     internal static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     internal static void WriteReport(string name, object results)

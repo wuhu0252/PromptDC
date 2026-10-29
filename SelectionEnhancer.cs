@@ -5,13 +5,15 @@ internal sealed record EnhancementResult(string Original, string Enhanced, bool 
 internal sealed class SelectionEnhancer(InputGuard guard)
 {
     public async Task<EnhancementResult> RunAsync(Func<string, CancellationToken, Task<string>> enhance,
-        Action<string> status, CancellationToken token)
+        Action<string> status, CancellationToken token, Func<CancellationToken, Task<bool>>? validateContext = null)
     {
         var window = Native.GetForegroundWindow();
         var epoch = guard.Epoch;
         // Do not synthesize Ctrl+C until the user's hotkey modifiers have been released.
         var deadline = Environment.TickCount64 + 2500;
         while (Native.ModifiersPressed && Environment.TickCount64 < deadline) await Task.Delay(25, token);
+        // WM_HOTKEY can arrive before queued modifier releases are reflected in keyboard state.
+        await Task.Delay(75, token);
         if (Native.ModifiersPressed) throw new InvalidOperationException("请松开快捷键后重试。");
         if (!guard.Matches(window, epoch)) throw new InvalidOperationException("输入位置已变化，请重新选中文字后重试。");
         status("正在读取选中文字…");
@@ -20,6 +22,13 @@ internal sealed class SelectionEnhancer(InputGuard guard)
         status("正在增强，请保持选区，暂时不要编辑或切换窗口…");
         var enhanced = await enhance(original, token);
         if (!guard.Matches(window, epoch) || Native.ModifiersPressed) return new(original, enhanced, false);
+        if (validateContext != null)
+        {
+            status("增强完成，正在再次核对当前聊天…");
+            try { if (!await validateContext(token)) return new(original, enhanced, false); }
+            catch (InvalidOperationException) { return new(original, enhanced, false); }
+            if (!guard.Matches(window, epoch)) return new(original, enhanced, false);
+        }
         string selected;
         try { selected = await CopySelection(window, epoch, token); }
         catch (InvalidOperationException) { return new(original, enhanced, false); }

@@ -11,6 +11,8 @@ internal sealed class MainForm : Form
     private readonly ComboBox model = new() { DropDownStyle = ComboBoxStyle.DropDown };
     private readonly ComboBox mode = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox hotkey = new();
+    private readonly CheckBox automaticContext = new() { Text = "自动读取 Codex 当前聊天上下文", AutoSize = true };
+    private readonly Label resultInfo = new() { Text = "原文", ForeColor = Color.FromArgb(101, 116, 128), Dock = DockStyle.Fill };
     private readonly TextBox instructions = new() { Multiline = true, Height = 74, ScrollBars = ScrollBars.Vertical };
     private readonly TextBox original = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
     private readonly TextBox enhanced = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -28,17 +30,17 @@ internal sealed class MainForm : Form
     public MainForm(bool background)
     {
         this.background = background;
-        Text = "PromptDC · 随手增强你的提示词";
+        Text = $"PromptDC {Application.ProductVersion.Split('+')[0]} · 自动上下文";
         Font = new Font("Microsoft YaHei UI", 9.5f);
         ForeColor = ink;
         BackColor = Color.FromArgb(244, 247, 248);
-        ClientSize = new Size(940, 730);
-        MinimumSize = new Size(880, 730);
+        ClientSize = new Size(940, 770);
+        MinimumSize = new Size(880, 770);
         StartPosition = FormStartPosition.CenterScreen;
         Icon = SystemIcons.Application;
 
         var header = new Panel { Dock = DockStyle.Top, Height = 104, Padding = new Padding(24, 14, 24, 8) };
-        header.Controls.Add(new Label { Text = "选中 · 按下 · 增强", Dock = DockStyle.Bottom, Height = 30, ForeColor = muted });
+        header.Controls.Add(new Label { Text = $"v{Application.ProductVersion.Split('+')[0]} · 选中 · 按下 · 增强", Dock = DockStyle.Bottom, Height = 30, ForeColor = muted });
         header.Controls.Add(new Label { Text = "PromptDC", Font = new Font("Segoe UI", 25, FontStyle.Bold), Dock = DockStyle.Top, Height = 48 });
         var columns = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 0, 24, 0), ColumnCount = 2, RowCount = 1 };
         columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
@@ -63,11 +65,12 @@ internal sealed class MainForm : Form
         Caption("模型"); model.Items.AddRange(["deepseek-flash", "deepseek-v4-pro"]); Add(model, 34);
         Caption("增强模式"); mode.Items.AddRange(["自动识别", "编程优先", "通用表达"]); Add(mode, 34);
         Caption("全局快捷键"); Add(hotkey, 34);
+        Add(automaticContext, 34);
         Caption("额外偏好（可选）"); Add(instructions, 82);
         var buttons = new FlowLayoutPanel { WrapContents = false };
         save.BackColor = accent; save.ForeColor = Color.White; save.FlatStyle = FlatStyle.Flat; save.FlatAppearance.BorderSize = 0;
         buttons.Controls.AddRange([save, test]); Add(buttons, 46);
-        Add(new Label { Text = "Key 仅加密保存在本机。选中的文字会发送给 DeepSeek；本工具不自动发送聊天消息。", ForeColor = muted }, 64);
+        Add(new Label { Text = "Key 仅加密保存在本机。选中文字及匹配到的聊天上下文会发送给 DeepSeek。", ForeColor = muted }, 64);
         preferences.Controls.Add(fields);
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
@@ -76,8 +79,8 @@ internal sealed class MainForm : Form
         tabs.TabPages.AddRange([start, result]); columns.Controls.Add(tabs, 1, 0);
         var intro = new Label
         {
-            Dock = DockStyle.Top, Height = 255,
-            Text = "01  填写 Key，保存并启用\n\n02  在 Codex 或浏览器输入框中选中文字\n\n03  按快捷键，松开后等待自动替换\n\n等待期间保持原来的选区。若你切换窗口、点击或继续输入，结果会保留在“最近结果”，不再自动替换。\n\n关闭窗口后继续在托盘运行；双击托盘图标可重新打开。"
+            Dock = DockStyle.Top, Height = 290,
+            Text = "01  填写 Key，保存并启用\n\n02  在 Codex 本机聊天的输入框中选中文字\n\n03  按快捷键，自动读取上下文并增强\n\n默认开启自动上下文。只有当前聊天唯一匹配时才会请求模型。内置示例框可以直接体验基础增强。\n\n等待期间保持原来的选区。若你切换窗口、点击或继续输入，结果会保留在“最近结果”。\n\n关闭窗口后在托盘继续运行；双击托盘图标可打开。"
         };
         var sandbox = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, Text = "帮我排查登录接口偶尔返回 500 的问题，先看看项目现有代码，别改接口返回格式。" };
         var sandboxCaption = new Label { Text = "试一试：选中下面的文字，再按快捷键", Dock = DockStyle.Top, Height = 32, ForeColor = accent };
@@ -89,7 +92,7 @@ internal sealed class MainForm : Form
         resultLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); resultLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
         resultLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); resultLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 65));
         resultLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        resultLayout.Controls.Add(new Label { Text = "原文", ForeColor = muted }, 0, 0); resultLayout.Controls.Add(original, 0, 1);
+        resultLayout.Controls.Add(resultInfo, 0, 0); resultLayout.Controls.Add(original, 0, 1);
         resultLayout.Controls.Add(new Label { Text = "增强结果（仅在本次运行中保留）", AutoSize = true, ForeColor = muted }, 0, 2); resultLayout.Controls.Add(enhanced, 0, 3);
         var copyButtons = new FlowLayoutPanel { Dock = DockStyle.Fill };
         var copyResult = new Button { Text = "复制增强结果", AutoSize = true };
@@ -131,6 +134,7 @@ internal sealed class MainForm : Form
         model.Text = settings.Model; mode.SelectedItem = settings.Mode;
         if (mode.SelectedIndex < 0) mode.SelectedIndex = 0;
         hotkey.Text = settings.Hotkey; instructions.Text = settings.Instructions;
+        automaticContext.Checked = settings.AutomaticContext;
         try { Register(settings.Hotkey); SetStatus(warning ?? $"已就绪 · {settings.Hotkey} · {(key.Text.Length > 0 ? "选中文字即可增强" : "请填写 API Key 并保存")}"); }
         catch (Exception e) { SetStatus(e.Message); }
     }
@@ -147,7 +151,7 @@ internal sealed class MainForm : Form
         {
             if (key.Text.Trim().Length == 0 || key.Text.Trim().Any(char.IsWhiteSpace)) throw new InvalidOperationException("请填写有效的 API Key（不能含空白字符）。");
             if (string.IsNullOrWhiteSpace(model.Text)) throw new InvalidOperationException("请填写模型名称。");
-            var next = settings with { ProtectedKey = Secret.Protect(key.Text.Trim()), Model = model.Text.Trim(), Mode = mode.Text, Hotkey = hotkey.Text.Trim(), Instructions = instructions.Text.Trim() };
+            var next = settings with { ProtectedKey = Secret.Protect(key.Text.Trim()), Model = model.Text.Trim(), Mode = mode.Text, Hotkey = hotkey.Text.Trim(), Instructions = instructions.Text.Trim(), AutomaticContext = automaticContext.Checked };
             try { Register(next.Hotkey); SettingsStore.Save(next); }
             catch { Register(settings.Hotkey); throw; }
             settings = next;
@@ -182,13 +186,34 @@ internal sealed class MainForm : Form
     private async Task EnhanceSelection()
     {
         if (key.Text.Length == 0) { Notify("请先配置 API Key", "双击托盘图标，填写 DeepSeek API Key 并保存。"); return; }
+        var targetWindow = Native.GetForegroundWindow();
+        var targetEpoch = guard.Epoch;
         SetBusy(true);
         try
         {
             var client = new DeepSeekClient(http);
-            var result = await new SelectionEnhancer(guard).RunAsync((text, token) => client.EnhanceAsync(text, settings, token), SetStatus, cancellation!.Token);
+            ChatContext? context = null;
+            // The built-in sample editor remains usable without a Codex history.
+            var needsContext = settings.AutomaticContext && targetWindow != Handle;
+            var result = await new SelectionEnhancer(guard).RunAsync(async (text, token) =>
+            {
+                if (needsContext)
+                {
+                    SetStatus("正在自动定位 Codex 当前聊天…");
+                    context = await ContextWorker.ResolveAsync(targetWindow, text, token);
+                    if (!guard.Matches(targetWindow, targetEpoch)) throw new InvalidOperationException("输入位置已变化，已停止本次请求。");
+                    SetStatus($"已结合 {context.Messages.Count} 条历史消息，正在增强…");
+                }
+                return await client.EnhanceAsync(text, settings, token, context);
+            }, SetStatus, cancellation!.Token, needsContext ? async token =>
+            {
+                var current = await ContextWorker.ResolveAsync(targetWindow, "", token);
+                return context != null && current.ThreadId == context.ThreadId;
+            } : null);
             original.Text = result.Original; enhanced.Text = result.Enhanced;
-            SetStatus(result.Replaced ? "已发送替换 · 可在原输入框按 Ctrl+Z 撤销" : "输入位置已变化 · 增强结果已保留，请从最近结果复制");
+            resultInfo.Text = context == null ? "原文 · 未使用聊天上下文" : $"原文 · 已结合 {context.Messages.Count} 条历史消息";
+            var contextSummary = context == null ? "未使用上下文" : $"已使用 {context.Messages.Count} 条上下文";
+            SetStatus(result.Replaced ? $"{contextSummary} · 已替换 · Ctrl+Z 可撤销" : $"{contextSummary} · 输入位置已变化，结果已保留");
             Notify(result.Replaced ? "提示词已增强" : "增强完成，未自动替换", result.Replaced ? "已粘贴回原选区，没有发送消息。" : "你在等待期间改变了输入位置。点击此提示查看结果。");
         }
         catch (Exception e) { var message = ErrorMessage(e); SetStatus(message); Notify("本次未完成", message); }

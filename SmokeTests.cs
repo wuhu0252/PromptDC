@@ -28,7 +28,7 @@ internal sealed class SmokeTests : Form
             var focusDeadline = Environment.TickCount64 + 60000;
             while (Native.GetForegroundWindow() != Handle && Environment.TickCount64 < focusDeadline)
                 await Task.Delay(150);
-            var parsed = Native.ParseHotkey("Ctrl+Alt+E");
+            var parsed = Native.ParseHotkey("Ctrl+Alt+Shift+9");
             SelfTests.Assert(Native.RegisterHotKey(Handle, Native.HotkeyId, parsed.Modifiers, parsed.Key), "hotkey already occupied");
             await Check("global hotkey replaces only selected Unicode text and restores clipboard", async () =>
             {
@@ -40,7 +40,7 @@ internal sealed class SmokeTests : Form
                     try { completion.SetResult(await new SelectionEnhancer(guard).RunAsync(async (text, token) => { SelfTests.Assert(text == "优化这段代码", "wrong selection"); await Task.Delay(100, token); return "请优化这段代码，保持现有行为。"; }, _ => { }, default)); }
                     catch (Exception e) { completion.SetException(e); }
                 };
-                Native.Chord(0x11, 0x12, 0x45);
+                Native.Chord(0x11, 0x12, 0x10, 0x39);
                 var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
                 SelfTests.Assert(result.Replaced && editor.Text == "前缀 请优化这段代码，保持现有行为。 后缀", "wrong replacement");
                 SelfTests.Assert(Clipboard.GetText() == "clipboard-before-test", "clipboard not restored");
@@ -66,6 +66,21 @@ internal sealed class SmokeTests : Form
                 try { await new SelectionEnhancer(guard).RunAsync((_, _) => throw new InvalidOperationException("mock API failure"), _ => { }, default); throw new Exception("failure not propagated"); }
                 catch (InvalidOperationException e) { SelfTests.Assert(e.Message == "mock API failure", "unexpected error"); }
                 SelfTests.Assert(editor.Text == "前缀 优化这段代码 后缀" && Clipboard.GetText() == "failure-clipboard", "source or clipboard lost");
+            });
+            await Check("conversation change during request retains result without pasting", async () =>
+            {
+                await Prepare(); Clipboard.SetText("context-clipboard");
+                var result = await new SelectionEnhancer(guard).RunAsync((_, _) => Task.FromResult("增强结果"), _ => { }, default,
+                    _ => Task.FromResult(false));
+                SelfTests.Assert(!result.Replaced && result.Enhanced == "增强结果" && editor.Text == "前缀 优化这段代码 后缀"
+                    && Clipboard.GetText() == "context-clipboard", "changed conversation overwritten");
+            });
+            await Check("context revalidation failure retains generated result without pasting", async () =>
+            {
+                await Prepare();
+                var result = await new SelectionEnhancer(guard).RunAsync((_, _) => Task.FromResult("增强结果"), _ => { }, default,
+                    _ => throw new InvalidOperationException("mock verification failure"));
+                SelfTests.Assert(!result.Replaced && result.Enhanced == "增强结果" && editor.Text == "前缀 优化这段代码 后缀", "verification failure changed source");
             });
         }
         catch (Exception e) { results.Add(new { name = "setup", passed = false, error = e.ToString() }); Environment.ExitCode = 1; }

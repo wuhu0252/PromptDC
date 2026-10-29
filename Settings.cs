@@ -12,6 +12,7 @@ internal sealed record Settings
     public string Hotkey { get; init; } = "Ctrl+Alt+E";
     public bool StartWithWindows { get; init; }
     public string Instructions { get; init; } = "";
+    public bool AutomaticContext { get; init; } = true;
     public string GetKey() => ProtectedKey.Length == 0 ? "" : Secret.Unprotect(ProtectedKey);
 }
 
