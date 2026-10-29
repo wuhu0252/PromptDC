@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace PromptDC;
 
 internal sealed record EnhancementResult(string Original, string Enhanced, bool Replaced);
@@ -46,7 +48,7 @@ internal sealed class SelectionEnhancer(InputGuard guard)
             // Allow Electron/browser processes time to consume the clipboard before restoring it.
             await Task.Delay(650, CancellationToken.None);
         }
-        finally { RestoreClipboard(previous, sequence); }
+        finally { await RestoreClipboardAsync(previous, sequence); }
         return new(original, enhanced, true);
     }
 
@@ -76,7 +78,7 @@ internal sealed class SelectionEnhancer(InputGuard guard)
             }
             throw new InvalidOperationException("未读取到选中文字，请确认已选中输入框中的文字。管理员窗口可能无法访问。");
         }
-        finally { RestoreClipboard(previous, ownedSequence); }
+        finally { await RestoreClipboardAsync(previous, ownedSequence); }
     }
 
     private static DataObject CaptureClipboard()
@@ -92,11 +94,25 @@ internal sealed class SelectionEnhancer(InputGuard guard)
         return result;
     }
 
-    private static void RestoreClipboard(DataObject previous, uint ownedSequence)
+    private static async Task RestoreClipboardAsync(DataObject previous, uint ownedSequence)
     {
-        // Preserve anything the user or another app copied in the meantime.
-        if (Native.GetClipboardSequenceNumber() != ownedSequence) return;
-        if (previous.GetFormats(false).Length == 0) Clipboard.Clear();
-        else Clipboard.SetDataObject(previous, true, 5, 40);
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            // Recheck on every retry: never overwrite something copied during the wait.
+            if (Native.GetClipboardSequenceNumber() != ownedSequence) return;
+            try
+            {
+                if (previous.GetFormats(false).Length == 0) Clipboard.Clear();
+                else Clipboard.SetDataObject(previous, true, 0, 0);
+                return;
+            }
+            catch (ExternalException e) when (e.ErrorCode == unchecked((int)0x800401D0))
+            {
+                // Another clipboard consumer may briefly hold it open. Yield the UI thread
+                // instead of blocking it with synchronous OLE retry sleeps. Restoration is best effort.
+                if (attempt == 19) return;
+                await Task.Delay(50, CancellationToken.None);
+            }
+        }
     }
 }

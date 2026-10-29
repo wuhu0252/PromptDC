@@ -101,6 +101,6 @@ internal sealed class SmokeTests : Form
     private async Task Check(string name, Func<Task> test)
     {
         try { await test(); results.Add(new { name, passed = true, error = "" }); }
-        catch (Exception e) { results.Add(new { name, passed = false, error = e.Message }); Environment.ExitCode = 1; }
+        catch (Exception e) { results.Add(new { name, passed = false, error = e.ToString() }); Environment.ExitCode = 1; }
     }
 }
