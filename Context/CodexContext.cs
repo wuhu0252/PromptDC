@@ -11,9 +11,9 @@ internal sealed record MatchDiagnostic(int Texts, int Anchors, List<int> AnchorL
 internal static class CodexContext
 {
     private const int MaxChats = 200;
-    public static ChatContext Resolve(WindowSnapshot snapshot, string home, string original, Action<MatchDiagnostic>? trace = null)
+    public static ChatContext Resolve(WindowSnapshot snapshot, string home, Action<MatchDiagnostic>? trace = null)
     {
-        var anchors = GetAnchors(snapshot, original);
+        var anchors = GetAnchors(snapshot);
         if (anchors.Count < 2)
             throw new InvalidOperationException("Codex 未提供足够的聊天区文字，无法可靠定位当前聊天，原文未替换。");
         var index = Directory.EnumerateFiles(home, "state_*.sqlite", SearchOption.TopDirectoryOnly)
@@ -23,15 +23,12 @@ internal static class CodexContext
         var rows = database.Query("SELECT id, title, cwd, rollout_path FROM threads WHERE archived = 0 AND source IN ('vscode', 'cli') LIMIT 201");
         if (rows.Count > MaxChats) throw new InvalidOperationException("本机待核对聊天过多，暂时无法可靠定位，原文未替换。");
         var chats = new List<StoredChat>();
-        long scannedBytes = 0;
+        long remainingBytes = 64 * 1024 * 1024;
         foreach (var row in rows)
         {
             var file = ValidateRolloutPath(home, row[3]);
-            scannedBytes += new FileInfo(file).Length;
-            if (scannedBytes > 64 * 1024 * 1024)
-                throw new InvalidOperationException("本次聊天核对数据超过 64 MB，原文未替换。");
             // An unreadable candidate must not silently turn an ambiguous match into a unique one.
-            var chat = new StoredChat(row[0], row[1], row[2], ReadMessages(file));
+            var chat = new StoredChat(row[0], row[1], row[2], ReadMessages(file, ref remainingBytes));
             chats.Add(chat);
         }
         var matches = FindMatches(chats, anchors);
@@ -45,23 +42,23 @@ internal static class CodexContext
                 ? "当前界面与本机聊天记录未形成唯一匹配，原文未替换。"
                 : "多个聊天包含相同的可见内容，无法确定当前聊天，原文未替换。");
         var match = matches[0];
-        return new(match.Chat.Id, match.Chat.Title, match.Chat.Project, LimitContext(match.Chat.Messages),
+        return new(match.Chat.Id, match.Chat.Title, match.Chat.Project, ChatText.LimitContext(match.Chat.Messages),
             $"核对了 {match.User} 条用户消息和 {match.Assistant} 条助手最终回复");
     }
 
-    internal static List<string> GetAnchors(WindowSnapshot snapshot, string original)
+    internal static List<string> GetAnchors(WindowSnapshot snapshot)
     {
         if (!snapshot.ConversationScoped) return [];
-        var draft = Normalize(original);
+        // Input exclusion is structural (UIA editable ancestors), not a comparison with
+        // the draft's text. A legitimate historical message may repeat the current input.
         return snapshot.Texts.Where(x => x.Excluded == "" && x.Type == "ControlType.Text" && ((x.Width > 0 && x.Height > 0) || x.Offscreen))
-            .Select(x => Normalize(x.Text)).Where(x => x.Length >= 6 && x.Length <= 6000)
-            .Where(x => draft.Length == 0 || (!x.Contains(draft, StringComparison.Ordinal) && !draft.Contains(x, StringComparison.Ordinal)))
+            .Select(x => ChatText.Normalize(x.Text)).Where(x => x.Length >= 6 && x.Length <= 6000)
             .Distinct(StringComparer.Ordinal).TakeLast(500).ToList();
     }
     private static List<(StoredChat Chat, int User, int Assistant)> FindMatches(List<StoredChat> chats, List<string> anchors)
     {
         var normalized = chats.ToDictionary(chat => chat.Id,
-            chat => chat.Messages.Select(message => (message.Role, Text: Normalize(message.Text))).ToList());
+            chat => chat.Messages.Select(message => (message.Role, Text: ChatText.Normalize(message.Text))).ToList());
         var matches = chats.Select(chat => (Chat: chat, Match: Match(chat, anchors)))
             .Where(x => x.Match.User > 0 && x.Match.Assistant > 0)
             .Select(x => (x.Chat, x.Match.User, x.Match.Assistant)).ToList();
@@ -86,19 +83,12 @@ internal static class CodexContext
         var user = 0; var assistant = 0;
         foreach (var message in chat.Messages)
         {
-            var text = Normalize(message.Text);
+            var text = ChatText.Normalize(message.Text);
             // Whole visible text fragments must match, not a fuzzy title or timestamp score.
             if (!anchors.Any(anchor => anchor.Length >= (message.Role == "assistant" ? 32 : 6) && text.Contains(anchor, StringComparison.Ordinal))) continue;
             if (message.Role == "user") user++; else if (message.Role == "assistant") assistant++;
         }
         return (user, assistant);
-    }
-    internal static string Normalize(string text)
-    {
-        var result = new StringBuilder(text.Length);
-        foreach (var c in text.Normalize(NormalizationForm.FormKC))
-            if (char.IsLetterOrDigit(c)) result.Append(char.ToUpperInvariant(c));
-        return result.ToString();
     }
     internal static string ValidateRolloutPath(string home, string path)
     {
@@ -112,32 +102,69 @@ internal static class CodexContext
     }
     internal static List<ChatMessage> ReadMessages(string path)
     {
-        if (new FileInfo(path).Length > 32 * 1024 * 1024)
-            throw new InvalidOperationException("聊天记录超过当前读取上限，原文未替换。");
+        long remainingBytes = 64 * 1024 * 1024;
+        return ReadMessages(path, ref remainingBytes);
+    }
+    private static List<ChatMessage> ReadMessages(string path, ref long remainingBytes)
+    {
         var messages = new List<ChatMessage>();
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        while (reader.ReadLine() is { } line)
+        // Seek backwards in bounded blocks: old tools and old conversation prefixes
+        // need not be loaded merely to keep the latest 20 actual chat messages.
+        using var pending = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        var position = stream.Length;
+        var tail = true;
+        long fileBytes = 0;
+        while (position > 0)
         {
-            // A running Codex may be writing the last JSONL line. Ignore only that incomplete tail.
+            var count = (int)Math.Min(buffer.Length, position);
+            if (remainingBytes < count || fileBytes + count > 32 * 1024 * 1024)
+                throw new InvalidOperationException("读取近期聊天记录达到安全上限，无法可靠定位，原文未替换。");
+            remainingBytes -= count; fileBytes += count;
+            position -= count;
+            stream.Position = position;
+            stream.ReadExactly(buffer.AsSpan(0, count));
+            for (var i = count - 1; i >= 0; i--)
+            {
+                if (buffer[i] != (byte)'\n') { pending.WriteByte(buffer[i]); continue; }
+                if (pending.Length == 0) continue;
+                ReadPending();
+                if (messages.Count == 20) { messages.Reverse(); return messages; }
+            }
+        }
+        if (pending.Length > 0) ReadPending();
+        messages.Reverse();
+        return messages;
+
+        void ReadPending()
+        {
+            var bytes = pending.GetBuffer();
+            var length = checked((int)pending.Length);
+            Array.Reverse(bytes, 0, length);
+            var line = Encoding.UTF8.GetString(bytes, 0, length).TrimStart('\uFEFF');
+            pending.SetLength(0);
+            if (string.IsNullOrWhiteSpace(line)) return;
+            var isTail = tail; tail = false;
             JsonDocument record;
             try { record = JsonDocument.Parse(line); }
             catch (JsonException)
             {
-                if (reader.EndOfStream && !line.TrimEnd().EndsWith('}')) break;
-                throw new InvalidOperationException("聊天记录包含无法解析的内容，原文未替换。");
+                // Only the unfinished final record may be ignored while Codex writes.
+                if (isTail && !line.TrimEnd().EndsWith('}')) return;
+                throw new InvalidOperationException("近期聊天记录包含无法解析的内容，原文未替换。");
             }
             using (record)
             {
                 var root = record.RootElement;
-                if (!root.TryGetProperty("type", out var kind) || kind.GetString() != "response_item") continue;
-                if (!root.TryGetProperty("payload", out var payload) || !payload.TryGetProperty("type", out var type) || type.GetString() != "message") continue;
+                if (!root.TryGetProperty("type", out var kind) || kind.GetString() != "response_item") return;
+                if (!root.TryGetProperty("payload", out var payload) || !payload.TryGetProperty("type", out var type) || type.GetString() != "message") return;
                 var role = payload.TryGetProperty("role", out var roleValue) ? roleValue.GetString() : null;
-                if (role is not ("user" or "assistant")) continue;
+                if (role is not ("user" or "assistant")) return;
                 var phase = payload.TryGetProperty("phase", out var phaseValue) ? phaseValue.GetString() : null;
                 var channel = payload.TryGetProperty("channel", out var channelValue) ? channelValue.GetString() : null;
-                if (role == "assistant" && (phase is not (null or "final_answer") || channel is not (null or "final"))) continue;
-                if (!payload.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) continue;
+                if (role == "assistant" && (phase is not (null or "final_answer") || channel is not (null or "final"))) return;
+                if (!payload.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) return;
                 var pieces = new List<string>();
                 foreach (var piece in content.EnumerateArray())
                     if (piece.TryGetProperty("type", out var pieceType) && pieceType.GetString() is "input_text" or "output_text"
@@ -146,7 +173,6 @@ internal static class CodexContext
                 if (cleaned.Length != 0) messages.Add(new(role, cleaned));
             }
         }
-        return messages;
     }
     internal static string CleanMessage(string text, bool user)
     {
@@ -168,28 +194,4 @@ internal static class CodexContext
         if (new[] { "<environment_context>", "<external_codex_apps_open_page>", "<permissions", "<skills_instructions>", "# AGENTS.md instructions" }.Any(prefix => text.StartsWith(prefix, StringComparison.Ordinal))) return "";
         return text;
     }
-    internal static List<ChatMessage> LimitContext(IReadOnlyList<ChatMessage> source, int budget = 20000)
-    {
-        var selected = new List<ChatMessage>();
-        var remaining = budget;
-        // Keep recent actual messages; prioritize the latest statements over old assumptions.
-        for (var i = source.Count - 1; i >= 0 && selected.Count < 20 && remaining > 0; i--)
-        {
-            var text = RedactSecrets(source[i].Text);
-            var take = Math.Min(Math.Min(text.Length, 5000), remaining);
-            if (take < text.Length)
-            {
-                const string marker = "\n[本条历史消息已截断]";
-                if (take <= marker.Length) break;
-                var end = take - marker.Length;
-                if (char.IsHighSurrogate(text[end - 1])) end--;
-                text = text[..end] + marker;
-            }
-            selected.Add(new(source[i].Role, text)); remaining -= text.Length;
-        }
-        selected.Reverse();
-        return selected;
-    }
-    internal static string RedactSecrets(string text) => Regex.Replace(text,
-        @"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b", "[已隐藏凭据]");
 }

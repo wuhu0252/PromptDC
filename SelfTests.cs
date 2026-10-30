@@ -28,6 +28,12 @@ internal static class SelfTests
             }
             finally { File.Delete(path); Directory.Delete(Path.GetDirectoryName(path)!); }
         });
+        Check("legacy unused startup setting does not change current preferences", () =>
+        {
+            var settings = JsonSerializer.Deserialize<Settings>("{\"StartWithWindows\":true,\"Hotkey\":\"Ctrl+Alt+Q\",\"AutomaticContext\":false}")!;
+            Assert(settings.Hotkey == "Ctrl+Alt+Q" && !settings.AutomaticContext && settings.GetKey() == "", "existing preferences changed");
+            Assert(!JsonSerializer.Serialize(settings).Contains("StartWithWindows"), "obsolete option still written");
+        });
         Check("hotkey accepts modifiers and rejects ambiguous combinations", () =>
         {
             Assert(Native.ParseHotkey("Ctrl+Alt+E") == (0x4003u, 69u), "hotkey parse");
@@ -39,8 +45,12 @@ internal static class SelfTests
             }
         });
         Check("DeepSeek request contract and Unicode output", () => ApiTest().GetAwaiter().GetResult());
+        LoginTests.Register(Check);
         Check("DeepSeek keeps history as data and only rewrites the last user message", () => ContextApiTest().GetAwaiter().GetResult());
+        Check("verified new-chat draft sends only selected text and no stored project history", () => NewChatApiTest().GetAwaiter().GetResult());
         ContextTests.Register(Check);
+        HarnessTests.Register(Check);
+        WindowAndPathTests.Register(Check);
         foreach (var code in new[] { 401, 402, 429, 500 })
             Check("HTTP " + code + " returns friendly error without leaking server body", () =>
                 ExpectFailure(code, "server-private-data").GetAwaiter().GetResult());
@@ -99,6 +109,19 @@ internal static class SelfTests
         Assert(history.RootElement.GetProperty("workspace").GetProperty("recordedPath").GetString() == "private-project-path", "workspace identity missing");
         Assert(!handler.Body!.Contains(secret) && !handler.Body.Contains("private-thread-id")
             && !messages[1].GetProperty("content").GetString()!.Contains("test-only"), "unneeded metadata or credentials sent");
+    }
+    private static async Task NewChatApiTest()
+    {
+        var handler = new StubHandler(200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"增强后的首条需求\"}}]}");
+        using var http = new HttpClient(handler);
+        var draft = new ChatContext("codex-draft:local-editor", "", "must-not-be-sent",
+            [new("user", "must-not-be-sent")], "") { IsNewChat = true };
+        var result = await new DeepSeekClient(http).EnhanceAsync("帮项目加个图标", TestSettings(), default, draft);
+        using var body = JsonDocument.Parse(handler.Body!);
+        var messages = body.RootElement.GetProperty("messages");
+        Assert(result == "增强后的首条需求" && messages.GetArrayLength() == 2
+            && messages[1].GetProperty("content").GetString() == "帮项目加个图标"
+            && !handler.Body!.Contains("must-not-be-sent") && !handler.Body.Contains("codex-draft:"), "draft acquired unrelated context");
     }
     internal static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     internal static void WriteReport(string name, object results)

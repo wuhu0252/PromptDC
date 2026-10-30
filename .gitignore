@@ -23,6 +23,8 @@ settings.json
 settings.json.tmp
 appsettings.*.local.json
 secrets.json
+.credentials.yaml
+.dsh/
 *.pem
 *.key
 *.pfx

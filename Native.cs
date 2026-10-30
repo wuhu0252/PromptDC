@@ -9,6 +9,7 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(nint window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] public static extern bool UnregisterHotKey(nint window, int id);
     [DllImport("user32.dll")] public static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern nint GetAncestor(nint window, uint flags);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(nint window);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
@@ -71,7 +72,7 @@ internal sealed class InputGuard : IDisposable
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern nint GetModuleHandleW(string? module);
     private readonly Hook keyboard, mouse;
     private readonly WinEvent foreground;
-    private readonly nint keyboardHandle, mouseHandle, foregroundHandle;
+    private readonly nint keyboardHandle, mouseHandle, foregroundHandle, focusHandle;
     public long Epoch { get; private set; }
     public InputGuard()
     {
@@ -86,11 +87,17 @@ internal sealed class InputGuard : IDisposable
                 && (Marshal.ReadInt32(data, 12) & 1) == 0) Epoch++;
             return CallNextHookEx(0, code, message, data);
         };
-        foreground = (_, _, _, _, _, _, _) => Epoch++;
+        foreground = (_, evt, window, _, _, _, _) =>
+        {
+            // Track programmatic focus moves between fields in the same foreground window,
+            // including Electron editors that share a native child window.
+            if (evt == 3 || (window != 0 && Native.GetAncestor(window, 2) == Native.GetForegroundWindow())) Epoch++;
+        };
         keyboardHandle = SetWindowsHookExW(13, keyboard, GetModuleHandleW(null), 0);
         mouseHandle = SetWindowsHookExW(14, mouse, GetModuleHandleW(null), 0);
         foregroundHandle = SetWinEventHook(3, 3, 0, foreground, 0, 0, 0);
-        if (keyboardHandle == 0 || mouseHandle == 0 || foregroundHandle == 0)
+        focusHandle = SetWinEventHook(0x8005, 0x8005, 0, foreground, 0, 0, 0);
+        if (keyboardHandle == 0 || mouseHandle == 0 || foregroundHandle == 0 || focusHandle == 0)
         {
             Dispose();
             throw new Win32Exception(Marshal.GetLastWin32Error(), "无法监听输入状态，已停止自动替换。");
@@ -102,5 +109,6 @@ internal sealed class InputGuard : IDisposable
         if (keyboardHandle != 0) UnhookWindowsHookEx(keyboardHandle);
         if (mouseHandle != 0) UnhookWindowsHookEx(mouseHandle);
         if (foregroundHandle != 0) UnhookWinEvent(foregroundHandle);
+        if (focusHandle != 0) UnhookWinEvent(focusHandle);
     }
 }

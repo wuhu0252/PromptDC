@@ -7,10 +7,11 @@ namespace PromptDC;
 internal sealed record Settings
 {
     public string ProtectedKey { get; init; } = "";
+    public string Provider { get; init; } = "DeepSeek";
+    public string ProtectedSession { get; init; } = "";
     public string Model { get; init; } = "deepseek-flash";
     public string Mode { get; init; } = "自动识别";
     public string Hotkey { get; init; } = "Ctrl+Alt+E";
-    public bool StartWithWindows { get; init; }
     public string Instructions { get; init; } = "";
     public bool AutomaticContext { get; init; } = true;
     public string GetKey() => ProtectedKey.Length == 0 ? "" : Secret.Unprotect(ProtectedKey);

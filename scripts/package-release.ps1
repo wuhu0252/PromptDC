@@ -16,27 +16,45 @@ if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath $checksumP
     throw 'Release artifacts already exist. Choose a new output directory to avoid overwriting them.'
 }
 # Always publish into a fresh staging directory; never package an existing user's app folder.
-$stagingPath = Join-Path $projectRoot ('dist/package-' + [guid]::NewGuid().ToString('N'))
+$stagingName = 'package-' + [guid]::NewGuid().ToString('N')
+$stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'dist'))
+$stagingPath = Join-Path $stagingRoot $stagingName
 $appPath = Join-Path $stagingPath 'PromptDC'
-& (Join-Path $PSScriptRoot 'publish.ps1') -OutputDirectory $appPath
-if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+try {
+    & (Join-Path $PSScriptRoot 'publish.ps1') -OutputDirectory $appPath
+    if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
 
-$runtime = Get-Content -LiteralPath (Join-Path $appPath 'PromptDC.runtimeconfig.json') -Raw | ConvertFrom-Json
-if (-not $runtime.runtimeOptions.includedFrameworks -or $runtime.runtimeOptions.framework -or $runtime.runtimeOptions.frameworks) {
-    throw 'The release must include the .NET runtime'
+    $runtime = Get-Content -LiteralPath (Join-Path $appPath 'PromptDC.runtimeconfig.json') -Raw | ConvertFrom-Json
+    if (-not $runtime.runtimeOptions.includedFrameworks -or $runtime.runtimeOptions.framework -or $runtime.runtimeOptions.frameworks) {
+        throw 'The release must include the .NET runtime'
+    }
+    foreach ($required in @('PromptDC.exe', 'PromptDC.dll', 'ZstdSharp.dll', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Windows.Forms.dll', 'UIAutomationClient.dll', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $appPath $required) -PathType Leaf)) { throw "Missing release file: $required" }
+    }
+    $forbidden = Get-ChildItem -LiteralPath $appPath -Recurse -Force | Where-Object {
+        $_.Name -match '^(settings\.json(?:\..*)?|secrets\.json|\.credentials\.yaml|\.dsh|\.env(?:\..*)?|\.git|node_modules|obj|bin|test-results)$' -or
+        $_.Extension -in @('.pdb', '.key', '.pem', '.pfx', '.p12', '.log', '.sqlite', '.jsonl')
+    }
+    if ($forbidden) { throw 'Unexpected settings, credentials, diagnostics or development files in release staging' }
+    New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
+    Compress-Archive -LiteralPath $appPath -DestinationPath $archivePath -CompressionLevel Optimal
+    $digest = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [System.IO.File]::WriteAllText($checksumPath, "$digest  $archiveName`n", [System.Text.UTF8Encoding]::new($false))
+    Write-Output "Archive: $archivePath"
+    Write-Output "SHA256: $digest"
+    Write-Output "Checksums: $checksumPath"
 }
-foreach ($required in @('PromptDC.exe', 'PromptDC.dll', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Windows.Forms.dll', 'UIAutomationClient.dll', 'README.md')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $appPath $required) -PathType Leaf)) { throw "Missing release file: $required" }
+finally {
+    if (Test-Path -LiteralPath $stagingPath) {
+        # Remove only the fresh directory owned by this invocation, after checking its
+        # resolved path and links. Never clean an existing user's application folder.
+        $resolved = (Resolve-Path -LiteralPath $stagingPath).ProviderPath
+        $links = @((Get-Item -LiteralPath $stagingRoot), (Get-Item -LiteralPath $resolved)) + @(Get-ChildItem -LiteralPath $resolved -Recurse -Force)
+        if ([System.IO.Path]::GetDirectoryName($resolved) -ne $stagingRoot -or
+            [System.IO.Path]::GetFileName($resolved) -ne $stagingName -or
+            @($links | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }).Count -gt 0) {
+            throw 'Refusing to clean staging outside the expected directory or through a link'
+        }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
 }
-$forbidden = Get-ChildItem -LiteralPath $appPath -Recurse -Force | Where-Object {
-    $_.Name -match '^(settings\.json(?:\..*)?|secrets\.json|\.env(?:\..*)?|\.git|node_modules|obj|bin|test-results)$' -or
-    $_.Extension -in @('.pdb', '.key', '.pem', '.pfx', '.p12', '.log', '.sqlite', '.jsonl')
-}
-if ($forbidden) { throw 'Unexpected settings, credentials, diagnostics or development files in release staging' }
-New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-Compress-Archive -LiteralPath $appPath -DestinationPath $archivePath -CompressionLevel Optimal
-$digest = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-[System.IO.File]::WriteAllText($checksumPath, "$digest  $archiveName`n", [System.Text.UTF8Encoding]::new($false))
-Write-Output "Archive: $archivePath"
-Write-Output "SHA256: $digest"
-Write-Output "Checksums: $checksumPath"

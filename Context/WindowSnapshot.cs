@@ -4,8 +4,8 @@ using System.Windows.Automation;
 
 namespace PromptDC;
 
-internal sealed record WindowText(string Type, string Text, string Id, int X, int Y, int Width, int Height, bool Offscreen, string Excluded = "");
-internal sealed record WindowSnapshot(nint Handle, int ProcessId, string ProcessPath, List<WindowText> Texts, bool ConversationScoped = false);
+internal sealed record WindowText(string Type, string Text, int Width, int Height, bool Offscreen, string Excluded = "");
+internal sealed record WindowSnapshot(List<WindowText> Texts, bool ConversationScoped = false);
 
 internal static class WindowCapture
 {
@@ -21,40 +21,30 @@ internal static class WindowCapture
         }
         catch { return false; }
     }
-    private static string ProcessPath(nint window)
+    internal static string ProcessPath(nint window)
     {
         GetWindowThreadProcessId(window, out var pid);
         return Process.GetProcessById((int)pid).MainModule?.FileName ?? "";
     }
     // Called only by the disposable worker process. UIA calls are never made on the UI thread.
-    public static WindowSnapshot Capture(nint window)
+    public static WindowSnapshot Capture(nint window, ComposerTarget? target = null)
     {
-        GetWindowThreadProcessId(window, out var pid);
-        var path = ProcessPath(window);
-        var root = AutomationElement.FromHandle(window);
-        // Codex adapter: the conversation scroll layout is distinct from the sidebar's localized "Chats" group.
-        // Match the stable layout class token, never the generated CSS-module suffix or a translated chat title.
-        var regions = root.FindAll(TreeScope.Descendants,
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Group));
-        var visibleRegions = regions.Cast<AutomationElement>().Where(element =>
-            element.Current.ClassName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("group/thread-scroll-layout", StringComparer.Ordinal)
-            && !element.Current.IsOffscreen).ToList();
-        if (visibleRegions.Count != 1) throw new InvalidOperationException("无法唯一识别 Codex 的对话区域，原文未替换。");
-        root = visibleRegions[0];
+        // Do not count every chat-shaped group in the whole window. In Chromium's compact
+        // layout this node can exist only in Raw View, and other panes may have other editors.
+        target ??= ComposerTarget.Locate(window, "codex", false);
+        var root = target.Scope;
         var cache = new CacheRequest { TreeScope = TreeScope.Element };
         cache.Add(AutomationElement.NameProperty);
-        cache.Add(AutomationElement.AutomationIdProperty);
         cache.Add(AutomationElement.ControlTypeProperty);
         cache.Add(AutomationElement.IsOffscreenProperty);
         cache.Add(AutomationElement.IsPasswordProperty);
         cache.Add(AutomationElement.BoundingRectangleProperty);
-        cache.Add(AutomationElement.IsKeyboardFocusableProperty);
         var texts = new List<WindowText>();
         using (cache.Activate())
         {
             var elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
             if (elements.Count > 12000) throw new InvalidOperationException("当前对话界面过大，无法完整核对，原文未替换。");
-            for (var i = 0; i < Math.Min(elements.Count, 12000); i++)
+            for (var i = 0; i < elements.Count; i++)
             {
                 var element = elements[i];
                 try
@@ -67,19 +57,19 @@ internal static class WindowCapture
                     if (excluded == "input") continue;
                     var rect = current.BoundingRectangle;
                     texts.Add(new(current.ControlType.ProgrammaticName, name.Length > 24000 ? name[..24000] : name,
-                        current.AutomationId, (int)rect.X, (int)rect.Y, (int)rect.Width, (int)rect.Height, current.IsOffscreen, excluded));
+                        (int)rect.Width, (int)rect.Height, current.IsOffscreen, excluded));
                 }
                 catch (ElementNotAvailableException) { }
             }
         }
-        return new(window, (int)pid, path, texts, true);
+        return new(texts, true);
     }
     private static string Exclusion(AutomationElement element, AutomationElement root)
     {
         var current = element;
         for (var depth = 0; depth < 30; depth++)
         {
-            current = TreeWalker.ControlViewWalker.GetParent(current);
+            current = TreeWalker.RawViewWalker.GetParent(current);
             if (current == null || current.Equals(root)) break;
             var data = current.Current;
             var type = data.ControlType;

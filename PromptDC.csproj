@@ -7,7 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.1</Version>
+    <ApplicationIcon>Assets\PromptDC.ico</ApplicationIcon>
+    <Version>0.3.6</Version>
     <AssemblyName>PromptDC</AssemblyName>
+    <DefaultItemExcludes>$(DefaultItemExcludes);test-results/**;dist/**</DefaultItemExcludes>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\PromptDC.ico" LogicalName="PromptDC.Assets.PromptDC.ico" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
 </Project>

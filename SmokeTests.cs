@@ -5,6 +5,8 @@ namespace PromptDC;
 internal sealed class SmokeTests : Form
 {
     private readonly RichTextBox editor = new() { Dock = DockStyle.Fill };
+    private readonly TextBox otherEditor = new() { Dock = DockStyle.Top, Text = "前缀 优化这段代码 后缀" };
+    private readonly TextBox search = new() { Dock = DockStyle.Top, Text = "另一个搜索输入框" };
     private readonly InputGuard guard = new();
     private readonly List<object> results = [];
     private readonly List<string> clipboardTrace = [];
@@ -13,6 +15,7 @@ internal sealed class SmokeTests : Form
     {
         Text = "PromptDC 本机选区测试"; ClientSize = new Size(620, 260);
         StartPosition = FormStartPosition.CenterScreen; Controls.Add(editor);
+        Controls.Add(otherEditor); Controls.Add(search);
         Shown += async (_, _) => await Execute();
     }
     public static void Run() { using var form = new SmokeTests(); Application.Run(form); }
@@ -26,6 +29,8 @@ internal sealed class SmokeTests : Form
         var backup = Clipboard.GetDataObject();
         try
         {
+            await LoginUiTests.RunAsync(Check);
+            Activate(); Native.SetForegroundWindow(Handle);
             var focusDeadline = Environment.TickCount64 + 60000;
             while (Native.GetForegroundWindow() != Handle && Environment.TickCount64 < focusDeadline)
                 await Task.Delay(150);
@@ -83,6 +88,29 @@ internal sealed class SmokeTests : Form
                     _ => throw new InvalidOperationException("mock verification failure"));
                 SelfTests.Assert(!result.Replaced && result.Enhanced == "增强结果" && editor.Text == "前缀 优化这段代码 后缀", "verification failure changed source");
             });
+            await Check("programmatic focus change to an identical input in the same restored window prevents paste", async () =>
+            {
+                await Prepare();
+                var result = await new SelectionEnhancer(guard).RunAsync(async (_, token) =>
+                {
+                    SelfTests.Assert(otherEditor.Focus(), "test setup could not focus the second input");
+                    otherEditor.Select(3, "优化这段代码".Length);
+                    await Task.Delay(180, token); return "不应粘贴";
+                }, _ => { }, default);
+                SelfTests.Assert(!result.Replaced && otherEditor.Text == "前缀 优化这段代码 后缀"
+                    && editor.Text == "前缀 优化这段代码 后缀", "same-window focus swap pasted to another field");
+            });
+            await Check("focus roundtrip between same-window fields remains invalid even after selection returns", async () =>
+            {
+                await Prepare();
+                var result = await new SelectionEnhancer(guard).RunAsync(async (_, token) =>
+                {
+                    SelfTests.Assert(otherEditor.Focus(), "test setup could not focus the second input"); await Task.Delay(150, token);
+                    SelfTests.Assert(editor.Focus(), "test setup could not restore focus"); editor.Select(3, "优化这段代码".Length);
+                    await Task.Delay(150, token); return "不应粘贴";
+                }, _ => { }, default);
+                SelfTests.Assert(!result.Replaced && editor.Text == "前缀 优化这段代码 后缀", "focus roundtrip was ignored");
+            });
         }
         catch (Exception e) { results.Add(new { name = "setup", passed = false, error = e.ToString() }); Environment.ExitCode = 1; }
         finally
@@ -94,7 +122,8 @@ internal sealed class SmokeTests : Form
     }
     private async Task Prepare()
     {
-        Activate(); Native.SetForegroundWindow(Handle); editor.Focus();
+        Show(); WindowState = FormWindowState.Normal; Activate(); Native.SetForegroundWindow(Handle);
+        SelfTests.Assert(editor.Focus(), "test setup could not focus the editor");
         editor.Text = "前缀 优化这段代码 后缀"; editor.Select(3, "优化这段代码".Length);
         await Task.Delay(220);
         SelfTests.Assert(Native.GetForegroundWindow() == Handle, "test window not in foreground");
