@@ -1,10 +1,10 @@
-﻿# PromptDC
+# PromptDC
 
 [English](README.en.md) · [GitHub 仓库](https://github.com/wuhu0252/PromptDC) · [下载发布版](https://github.com/wuhu0252/PromptDC/releases/latest)
 
 Windows 提示词增强工具：在输入框中选中文字，按 **Ctrl+Alt+E**，用所选服务商增强后替换原选区。不会按 Enter 或提交聊天消息。支持自动读取 Codex 和已适配的 DeepSeek Harness 官方 Windows 桌面版本机聊天上下文。
 
-当前版本为 **0.3.6**，包含精简提示词、多服务商独立登录页、30 天登录状态、Harness 上下文适配和应用图标。
+当前版本为 **0.3.7**，包含精简提示词、多服务商独立登录页、30 天登录状态、Harness 上下文适配和应用图标。
 
 ## 当前源码的登录流程
 
@@ -30,13 +30,13 @@ Windows 提示词增强工具：在输入框中选中文字，按 **Ctrl+Alt+E**
 
 ## 下载与使用
 
-1. 打开[最新发布页](https://github.com/wuhu0252/PromptDC/releases/latest)，在 **Assets** 下载 **`PromptDC-0.3.6-win-x64.zip`** 和 `SHA256SUMS.txt`。GitHub 自动生成的 **Source code** 压缩包不是运行包。
+1. 打开[最新发布页](https://github.com/wuhu0252/PromptDC/releases/latest)，在 **Assets** 下载 **`PromptDC-0.3.7-win-x64.zip`** 和 `SHA256SUMS.txt`。GitHub 自动生成的 **Source code** 压缩包不是运行包。
 2. 全部解压，进入 `PromptDC` 文件夹，双击 **`PromptDC.exe`**。保留旁边全部 DLL 和子目录；运行包自带 .NET，无需安装 SDK、运行时或 Git。
 3. 在独立登录页选择服务商和模型，填写自己的 **API 密钥**，点击 **“登录（自动验证）”**。验证会产生一次真实 API 调用；失败时按提示检查 Key、账户或网络。
 4. 登录成功后进入主界面；按需调整增强模式、快捷键、自动上下文及额外偏好，点击 **“保存偏好”**。
 5. 在聊天输入框选中文字，按 **Ctrl+Alt+E** 后松开，保持窗口、焦点和选区，等待替换。可用 **Ctrl+Z** 撤销；软件内置示例框可测试基础增强。
 
-PowerShell 校验命令：`Get-FileHash .\PromptDC-0.3.6-win-x64.zip -Algorithm SHA256`，与校验文件比较。
+PowerShell 校验命令：`Get-FileHash .\PromptDC-0.3.7-win-x64.zip -Algorithm SHA256`，与校验文件比较。
 
 浏览器等未适配应用可取消勾选“自动读取聊天上下文（Codex / Harness）”并保存，此时只增强选中文字。
 
@@ -46,6 +46,7 @@ PowerShell 校验命令：`Get-FileHash .\PromptDC-0.3.6-win-x64.zip -Algorithm 
 
 - 支持自动识别、编程优先、通用表达模式、额外偏好、自定义模型和全局快捷键。
 - 默认精简改写、合并重复要求：短请求优先一段 1～3 句，通常不超过 120 个中文字符；复杂请求通常不超过原文长度的 1.5 倍。这是模型的编辑目标，不会截断结果，保留明确要求和必要细节优先。
+- 精简时保留必要专业术语，允许将口语需求转为准确的技术表达，并补充由原意或已确认上下文直接支持的技术目标与处理要求。只补消除歧义、提升执行效果所需的内容，不堆砌术语、不擅自指定技术方案，也不把推测当成结论。
 - “额外偏好”是每次增强都会附带的改写要求，例如“用中文，尽量在 100 字以内，不加标题”。填写后点击“保存偏好”生效；留空也默认精简。它约束增强后的提示词，不直接设置接收任务的 AI 的回复风格；单次任务内容请写在选中文字中。
 - 自动上下文默认开启，必须唯一匹配当前输入框、聊天区域与本机记录。标题、输入框数量和修改时间不能单独证明当前会话。
 - DeepSeek 接口 `https://api.deepseek.com/chat/completions`；该服务商默认 `deepseek-flash`，关闭 thinking、非流式、temperature 0.3、max_tokens 8192。输入上限 24,000 UTF-16 字符，请求超时 90 秒。
@@ -140,7 +141,7 @@ dotnet build .\PromptDC.csproj -c Release
 
 前者默认输出 `dist/PromptDC/PromptDC.exe` 与完整依赖，自带运行时；`-FrameworkDependent` 要求已安装匹配的 .NET Desktop Runtime，不适合通用“只填 Key”包。两脚本都支持 `-OutputDirectory`。
 
-后者按 csproj 版本输出 `dist/releases/PromptDC-0.3.6-win-x64.zip` 与 `SHA256SUMS.txt`，使用全新临时目录，检查运行时/必要文件，拒绝配置、凭据、调试与开发文件，携带两份 README 和第三方许可，最后清理本次临时目录。已有附件不覆盖。ZIP 包含完整 `PromptDC/`；脚本不会创建标签或上传 Release。
+后者按 csproj 版本输出 `dist/releases/PromptDC-0.3.7-win-x64.zip` 与 `SHA256SUMS.txt`，使用全新临时目录，检查运行时/必要文件，拒绝配置、凭据、调试与开发文件，携带两份 README 和第三方许可，最后清理本次临时目录。已有附件不覆盖。ZIP 包含完整 `PromptDC/`；脚本不会创建标签或上传 Release。
 
 `bin`、`obj`、`dist`、`test-results` 是忽略的本地产物，构建排除发布和测试输出目录。分发前检查 ZIP、校验值、自检与原生回归，再创建对应版本的 Release 并上传 ZIP/校验文件。仓库不得包含 API Key、settings.json、.env 或聊天记录。
 

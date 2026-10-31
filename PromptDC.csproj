@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\PromptDC.ico</ApplicationIcon>
-    <Version>0.3.6</Version>
+    <Version>0.3.7</Version>
     <AssemblyName>PromptDC</AssemblyName>
     <DefaultItemExcludes>$(DefaultItemExcludes);test-results/**;dist/**</DefaultItemExcludes>
   </PropertyGroup>
