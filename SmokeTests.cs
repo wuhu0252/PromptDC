@@ -26,9 +26,10 @@ internal sealed class SmokeTests : Form
     }
     private async Task Execute()
     {
-        var backup = Clipboard.GetDataObject();
+        DataObject? backup = null;
         try
         {
+            backup = SelectionEnhancer.CaptureClipboard();
             await LoginUiTests.RunAsync(Check);
             Activate(); Native.SetForegroundWindow(Handle);
             var focusDeadline = Environment.TickCount64 + 60000;
@@ -115,9 +116,30 @@ internal sealed class SmokeTests : Form
         catch (Exception e) { results.Add(new { name = "setup", passed = false, error = e.ToString() }); Environment.ExitCode = 1; }
         finally
         {
-            Native.UnregisterHotKey(Handle, Native.HotkeyId); guard.Dispose();
-            if (backup != null) Clipboard.SetDataObject(backup, true); else Clipboard.Clear();
-            SelfTests.WriteReport("smoke-tests.json", results); Close();
+            try
+            {
+                Native.UnregisterHotKey(Handle, Native.HotkeyId); guard.Dispose();
+                if (backup != null)
+                {
+                    var sequence = Native.GetClipboardSequenceNumber();
+                    await Check("test cleanup restores clipboard without an unhandled exception", async () =>
+                    {
+                        var restored = await ClipboardRestore.TryAsync(() =>
+                        {
+                            if (backup.GetFormats(false).Length == 0) Clipboard.Clear();
+                            else Clipboard.SetDataObject(backup, true, 0, 0);
+                        }, () => Native.GetClipboardSequenceNumber() == sequence, clipboardTrace.Add);
+                        SelfTests.Assert(restored, "clipboard restoration did not complete; clipboard busy or changed");
+                    });
+                }
+            }
+            catch (Exception e) { results.Add(new { name = "cleanup", passed = false, error = e.ToString() }); Environment.ExitCode = 1; }
+            finally
+            {
+                try { SelfTests.WriteReport("smoke-tests.json", results); }
+                catch { Environment.ExitCode = 1; Console.Error.WriteLine("无法写入桌面测试报告。"); }
+                finally { Close(); }
+            }
         }
     }
     private async Task Prepare()

@@ -45,6 +45,33 @@ internal static class SelfTests
             }
         });
         Check("DeepSeek request contract and Unicode output", () => ApiTest().GetAwaiter().GetResult());
+        Check("clipboard busy retries then restores", () =>
+        {
+            var attempts = 0;
+            var restored = ClipboardRestore.TryAsync(() =>
+            {
+                if (++attempts < 3) throw new System.Runtime.InteropServices.ExternalException("synthetic clipboard busy", unchecked((int)0x800401D0));
+            }, () => true, delay: () => Task.CompletedTask).GetAwaiter().GetResult();
+            Assert(restored && attempts == 3, "transient contention not recovered");
+        });
+        Check("persistent clipboard contention returns failure without throwing", () =>
+        {
+            var attempts = 0;
+            var restored = ClipboardRestore.TryAsync(() =>
+            {
+                attempts++; throw new System.Runtime.InteropServices.ExternalException("synthetic clipboard busy", unchecked((int)0x800401D0));
+            }, () => true, delay: () => Task.CompletedTask).GetAwaiter().GetResult();
+            Assert(!restored && attempts == 20, "retry exhaustion not bounded");
+        });
+        Check("clipboard changed during retry is never overwritten", () =>
+        {
+            var ownsClipboard = true; var attempts = 0;
+            var restored = ClipboardRestore.TryAsync(() =>
+            {
+                attempts++; throw new System.Runtime.InteropServices.ExternalException("synthetic clipboard busy", unchecked((int)0x800401D0));
+            }, () => ownsClipboard, delay: () => { ownsClipboard = false; return Task.CompletedTask; }).GetAwaiter().GetResult();
+            Assert(!restored && attempts == 1, "new clipboard content would be overwritten");
+        });
         LoginTests.Register(Check);
         Check("DeepSeek keeps history as data and only rewrites the last user message", () => ContextApiTest().GetAwaiter().GetResult());
         Check("verified new-chat draft sends only selected text and no stored project history", () => NewChatApiTest().GetAwaiter().GetResult());

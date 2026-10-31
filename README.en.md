@@ -4,17 +4,17 @@
 
 A Windows prompt enhancer: select text in an input field and press **Ctrl+Alt+E** to enhance it with your chosen provider and replace the selection. It does not press Enter or submit chat messages. Automatic context supports local chats in Codex and the adapted official DeepSeek Harness Windows desktop build.
 
-The current version is **0.3.7**, with concise rewrites, a separate multi-provider login page, 30-day saved sessions, Harness context support and an application icon.
+The current version is **0.3.8**, with concise rewrites, a separate multi-provider login page, 30-day saved sessions, Harness context support and an application icon.
 
 ## Download and use
 
-1. Open the [latest release](https://github.com/wuhu0252/PromptDC/releases/latest) and download **`PromptDC-0.3.7-win-x64.zip`** and `SHA256SUMS.txt` from **Assets**. GitHub's automatically generated **Source code** archives are not application packages.
+1. Open the [latest release](https://github.com/wuhu0252/PromptDC/releases/latest) and download **`PromptDC-0.3.8-win-x64.zip`** and `SHA256SUMS.txt` from **Assets**. GitHub's automatically generated **Source code** archives are not application packages.
 2. Extract everything, open the `PromptDC` folder and double-click **`PromptDC.exe`**. Keep all adjacent DLLs and subdirectories. The package includes .NET; no SDK, runtime installation or Git is needed.
 3. Choose a provider and model on the separate login page, enter your **API key**, then click **“登录（自动验证）”** (Login). This makes a real API call; follow the error message if verification fails.
 4. After successful login, adjust the mode, hotkey, automatic context and extra preferences as needed, then click **“保存偏好”** (Save preferences).
 5. Select text in the chat input, press and release **Ctrl+Alt+E**, and keep the window, focus and selection unchanged. **Ctrl+Z** can undo the replacement. The built-in sample field can test basic enhancement.
 
-PowerShell checksum command: `Get-FileHash .\PromptDC-0.3.7-win-x64.zip -Algorithm SHA256`; compare with the checksum file.
+PowerShell checksum command: `Get-FileHash .\PromptDC-0.3.8-win-x64.zip -Algorithm SHA256`; compare with the checksum file.
 
 For browsers and unsupported applications, uncheck “自动读取聊天上下文（Codex / Harness）” (Automatic chat context) and save. Only selected text is enhanced.
 
@@ -115,7 +115,7 @@ Explicit options include `--diagnose-context <HWND>` (read-only diagnosis) and `
 
 The first produces `dist/PromptDC/PromptDC.exe` and complete dependencies, including the runtime. `-FrameworkDependent` requires an installed matching .NET Desktop Runtime and is unsuitable for a general “only enter your Key” package. Both scripts accept `-OutputDirectory`.
 
-The second uses the csproj version to produce `dist/releases/PromptDC-0.3.7-win-x64.zip` and `SHA256SUMS.txt`, publishes into fresh staging, checks runtime/required files, rejects settings, credentials, debugging/development files, includes both READMEs and third-party notices, and finally removes its staging directory. Existing attachments are never overwritten. The ZIP contains the complete `PromptDC/` folder; the script does not create tags or upload a Release.
+The second uses the csproj version to produce `dist/releases/PromptDC-0.3.8-win-x64.zip` and `SHA256SUMS.txt`, publishes into fresh staging, checks runtime/required files, rejects settings, credentials, debugging/development files, includes both READMEs and third-party notices, and finally removes its staging directory. Existing attachments are never overwritten. The ZIP contains the complete `PromptDC/` folder; the script does not create tags or upload a Release.
 
 `bin`, `obj`, `dist` and `test-results` are ignored local outputs; release and test outputs are excluded from source compilation. Before distribution, check ZIP contents, checksums, self-tests and native regression, then create the matching Release and upload ZIP/checksum files. The repository must not contain API Keys, settings.json, .env or chat records.
 

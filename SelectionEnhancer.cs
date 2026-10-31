@@ -87,7 +87,7 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         finally { await RestoreClipboardAsync(previous, ownedSequence); }
     }
 
-    private static DataObject CaptureClipboard()
+    internal static DataObject CaptureClipboard()
     {
         var result = new DataObject();
         var current = Clipboard.GetDataObject();
@@ -100,27 +100,10 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         return result;
     }
 
-    private async Task RestoreClipboardAsync(DataObject previous, uint ownedSequence)
-    {
-        for (var attempt = 0; attempt < 20; attempt++)
-        {
-            // Recheck on every retry: never overwrite something copied during the wait.
-            if (Native.GetClipboardSequenceNumber() != ownedSequence) { trace?.Invoke("restore skipped: sequence changed"); return; }
-            try
+    private Task<bool> RestoreClipboardAsync(DataObject previous, uint ownedSequence) =>
+        ClipboardRestore.TryAsync(() =>
             {
                 if (previous.GetFormats(false).Length == 0) Clipboard.Clear();
                 else Clipboard.SetDataObject(previous, true, 0, 0);
-                trace?.Invoke("restore succeeded on attempt " + attempt);
-                return;
-            }
-            catch (ExternalException e) when (e.ErrorCode == unchecked((int)0x800401D0))
-            {
-                // Another clipboard consumer may briefly hold it open. Yield the UI thread
-                // instead of blocking it with synchronous OLE retry sleeps. Restoration is best effort.
-                trace?.Invoke("restore busy on attempt " + attempt + "; sequence changed=" + (Native.GetClipboardSequenceNumber() != ownedSequence));
-                if (attempt == 19) return;
-                await Task.Delay(50, CancellationToken.None);
-            }
-        }
-    }
+            }, () => Native.GetClipboardSequenceNumber() == ownedSequence, trace);
 }
