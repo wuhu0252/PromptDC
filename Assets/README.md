@@ -7,8 +7,4 @@
 - `MainForm.cs` loads that resource for the window, taskbar and notification area.
 - Both publishing scripts inherit the project configuration; no external icon file is required at runtime.
 
-Artwork generated with the built-in imagegen tool. Generation prompt:
-
-```text
-undefined
-```
+Artwork generated with the built-in imagegen tool. The original generation prompt was not retained.

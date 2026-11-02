@@ -8,6 +8,35 @@ internal static class LoginUiTests
 {
     public static async Task RunAsync(Func<string, Func<Task>, Task> check)
     {
+        await check("invalid startup credentials offer cleanup retry when disk writes fail", () =>
+        {
+            var stored = new Settings { ProtectedKey = Secret.Protect("legacy-test-key") };
+            var failWrites = true;
+            using var form = Create(() => stored, value => { if (failWrites) throw new IOException(); stored = value; }, new Handler());
+            form.Show(); AssertPage(form, loggedIn: false);
+            SelfTests.Assert(Field<Button>(form, "cleanupRetry").Visible && Field<Label>(form, "status").Text.Contains("磁盘清除失败"),
+                "startup cleanup failure cannot be retried");
+            failWrites = false; Invoke(form, "Logout");
+            SelfTests.Assert(stored.ProtectedKey == "" && !Field<Button>(form, "cleanupRetry").Visible, "cleanup retry failed");
+            return Task.CompletedTask;
+        });
+        await check("null settings fields recover to usable login defaults", () =>
+        {
+            var stored = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"ProtectedKey\":null,\"ProtectedSession\":null,\"Provider\":null,\"Model\":null,\"Hotkey\":null,\"Mode\":null,\"Instructions\":null}")!;
+            using var form = Create(() => stored, value => stored = value, new Handler());
+            form.Show(); AssertPage(form, loggedIn: false);
+            SelfTests.Assert(Invoke(form, "EnsureLoggedIn") is false && Field<ComboBox>(form, "provider").Text == "DeepSeek"
+                && Field<TextBox>(form, "hotkey").Text == "Ctrl+Alt+E", "null settings broke login defaults");
+            return Task.CompletedTask;
+        });
+        await check("switching or editing the model clears typed credentials", () =>
+        {
+            using var form = Create(() => new(), _ => { }, new Handler());
+            Field<TextBox>(form, "key").Text = "synthetic-ui-test-key";
+            Field<ComboBox>(form, "model").Text = "custom-model";
+            SelfTests.Assert(Field<TextBox>(form, "key").Text == "", "model change retained typed credentials");
+            return Task.CompletedTask;
+        });
         await check("login UI masks input, saves only after validation, restores session and logs out", async () =>
         {
             Settings stored = new();

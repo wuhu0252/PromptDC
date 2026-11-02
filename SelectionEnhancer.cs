@@ -37,8 +37,12 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         if (selected != original || !guard.Matches(window, epoch) || Native.ModifiersPressed)
             return new(original, enhanced, false);
 
-        var previous = CaptureClipboard();
-        Clipboard.SetText(enhanced);
+        var beforeWrite = Native.GetClipboardSequenceNumber();
+        DataObject previous;
+        try { previous = CaptureClipboard(); }
+        catch (ExternalException) { return new(original, enhanced, false); }
+        if (!await TrySetClipboardText(enhanced, window, epoch, beforeWrite, token))
+            return new(original, enhanced, false);
         var sequence = Native.GetClipboardSequenceNumber();
         try
         {
@@ -57,7 +61,9 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         if (!guard.Matches(window, epoch)) throw new InvalidOperationException("输入位置已变化。");
         var previous = CaptureClipboard();
         var marker = "PromptDC-selection-" + Guid.NewGuid();
-        Clipboard.SetText(marker);
+        var beforeWrite = Native.GetClipboardSequenceNumber();
+        if (!await TrySetClipboardText(marker, window, epoch, beforeWrite, token))
+            throw new InvalidOperationException("剪贴板正忙或输入位置已变化，请重新选中文字后重试。");
         var ownedSequence = Native.GetClipboardSequenceNumber();
         var markerSequence = ownedSequence;
         try
@@ -76,7 +82,9 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
                     if (Clipboard.ContainsText())
                     {
                         var text = Clipboard.GetText();
-                        if (text != marker) return text;
+                        // Clipboard synchronization may expose an empty intermediate
+                        // value before the actual copied text is available.
+                        if (text != marker && !string.IsNullOrWhiteSpace(text)) return text;
                     }
                 }
                 catch (ExternalException e) when (e.ErrorCode == unchecked((int)0x800401D0))
@@ -86,6 +94,11 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         }
         finally { await RestoreClipboardAsync(previous, ownedSequence); }
     }
+
+    private Task<bool> TrySetClipboardText(string text, nint window, long epoch, uint sequence, CancellationToken token) =>
+        ClipboardRestore.TryAsync(() => Clipboard.SetText(text),
+            () => guard.Matches(window, epoch) && !Native.ModifiersPressed && Native.GetClipboardSequenceNumber() == sequence,
+            trace, () => Task.Delay(50, token));
 
     internal static DataObject CaptureClipboard()
     {

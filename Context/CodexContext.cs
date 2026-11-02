@@ -62,15 +62,15 @@ internal static class CodexContext
         var matches = chats.Select(chat => (Chat: chat, Match: Match(chat, anchors)))
             .Where(x => x.Match.User > 0 && x.Match.Assistant > 0)
             .Select(x => (x.Chat, x.Match.User, x.Match.Assistant)).ToList();
-        if (matches.Count <= 1) return matches;
         // Intersect exact message evidence. Shared fork prefixes do not outweigh a later distinguishing message.
         foreach (var anchor in anchors)
         {
             // Short UI labels cannot decide between related forks. Only compare candidates with both message roles.
             if (anchor.Length < 24) continue;
-            var candidateIds = matches.Select(x => x.Chat.Id).ToHashSet(StringComparer.Ordinal);
-            var supporting = normalized.Where(chat => candidateIds.Contains(chat.Key) && chat.Value.Any(message =>
-                anchor.Length >= (message.Role == "assistant" ? 32 : 6) && message.Text.Contains(anchor, StringComparison.Ordinal)))
+            // Compare against all records, including eliminated candidates. Otherwise
+            // contradictory fork fragments select whichever branch appears first.
+            var supporting = normalized.Where(chat => chat.Value.Any(message =>
+                anchor.Length >= (message.Role == "assistant" ? 8 : 6) && message.Text.Contains(anchor, StringComparison.Ordinal)))
                 .Select(chat => chat.Key).ToHashSet(StringComparer.Ordinal);
             if (supporting.Count == 0) continue; // A UI label or a still-streaming progress message is not history evidence.
             matches.RemoveAll(match => !supporting.Contains(match.Chat.Id));
@@ -84,8 +84,11 @@ internal static class CodexContext
         foreach (var message in chat.Messages)
         {
             var text = ChatText.Normalize(message.Text);
-            // Whole visible text fragments must match, not a fuzzy title or timestamp score.
-            if (!anchors.Any(anchor => anchor.Length >= (message.Role == "assistant" ? 32 : 6) && text.Contains(anchor, StringComparison.Ordinal))) continue;
+            // Rich text splits a single reply into several UIA text nodes. Require
+            // 32 distinct matched characters in that same final reply, rather than
+            // one 32-character node. Duplicate/overlapping nodes add no evidence.
+            if (message.Role == "assistant" ? !ChatText.HasAssistantEvidence(text, anchors)
+                : !anchors.Any(anchor => anchor.Length >= 6 && text.Contains(anchor, StringComparison.Ordinal))) continue;
             if (message.Role == "user") user++; else if (message.Role == "assistant") assistant++;
         }
         return (user, assistant);

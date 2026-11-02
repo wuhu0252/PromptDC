@@ -176,6 +176,7 @@ internal sealed class MainForm : Form
             key.Clear();
         };
         provider.SelectedIndex = 0; Add(provider, 34);
+        model.TextChanged += (_, _) => key.Clear();
         Caption("模型"); Add(model, 34);
         Caption("API 密钥（API Key）"); Add(key, 34);
         key.PlaceholderText = "请输入所选服务商的 API 密钥";
@@ -212,12 +213,17 @@ internal sealed class MainForm : Form
         string? warning = null;
         try
         {
-            settings = loadSettings();
+            settings = SettingsStore.Sanitize(loadSettings());
             if (!LoginSession.IsValid(settings, DateTimeOffset.UtcNow)
                 && (settings.ProtectedKey.Length > 0 || settings.ProtectedSession.Length > 0))
             {
                 settings = LoginSession.Clear(settings);
-                saveSettings(settings);
+                try { saveSettings(settings); }
+                catch
+                {
+                    ShowCleanupFailure();
+                    warning = "凭据已失效，但磁盘清除失败；请检查权限并重试清除。";
+                }
             }
         }
         catch (Exception) { warning = "设置读取失败，请重新登录。"; }
@@ -287,9 +293,19 @@ internal sealed class MainForm : Form
             settings = LoginSession.Clear(settings);
             RefreshLoginUI();
             try { saveSettings(settings); SetStatus("登录已到期或凭据不可用，请重新登录。"); }
-            catch { SetStatus("登录已失效，但配置文件无法写入，请检查文件权限后重新登录。"); }
+            catch
+            {
+                ShowCleanupFailure();
+                SetStatus("登录已失效，但磁盘清除失败；请检查权限并重试清除。");
+            }
         }
         return false;
+    }
+
+    private void ShowCleanupFailure()
+    {
+        loginHint.Text = "磁盘清除失败，请检查权限并点击下方按钮重试。";
+        cleanupRetry.Visible = true;
     }
 
     private void Logout()

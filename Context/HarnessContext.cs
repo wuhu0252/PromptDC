@@ -42,8 +42,8 @@ internal static class HarnessContext
         bool Supports(List<ChatMessage> messages, ChatMessage anchor) => messages.Any(x => x.Role == anchor.Role
             && x.Text.Contains(anchor.Text, StringComparison.Ordinal));
         var matches = normalized.Where(chat => anchors.Any(x => x.Role == "user" && Supports(chat.Messages, x))
-            && chat.Messages.Where(x => x.Role == "assistant").Any(message => anchors.Where(x => x.Role == "assistant"
-                && message.Text.Contains(x.Text, StringComparison.Ordinal)).Sum(x => x.Text.Length) >= 32)).ToList();
+            && chat.Messages.Where(x => x.Role == "assistant").Any(message =>
+                ChatText.HasAssistantEvidence(message.Text, anchors.Where(x => x.Role == "assistant").Select(x => x.Text)))).ToList();
         // Use all exact supported evidence, not recency or a highest-score guess. A fork's
         // distinguishing message can disambiguate its shared prefix; contradictions refuse it.
         foreach (var anchor in anchors)

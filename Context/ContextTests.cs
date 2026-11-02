@@ -7,6 +7,49 @@ internal static class ContextTests
 {
     public static void Register(Action<string, Action> check)
     {
+        check("Codex refuses contradictory fork evidence regardless of fragment ordering", () =>
+        {
+            using var fixture = new Fixture();
+            const string detailA = "分支甲要求使用已有数据库结构和字段并保留现有接口及其返回格式";
+            const string detailB = "分支乙要求新增独立的数据表和接口并且使用另一套不同的返回格式";
+            fixture.Add("a", [.. Messages(), new("user", detailA)]);
+            fixture.Add("b", [.. Messages(), new("user", detailB)]);
+            foreach (var details in new[] { new[] { detailA, detailB }, new[] { detailB, detailA } })
+                Reject(() => CodexContext.Resolve(Snapshot() with { Texts = [.. Snapshot().Texts, .. details.Select(Text)] }, fixture.Home));
+        });
+        check("Codex matches a final reply split by rich text and Markdown lists", () =>
+        {
+            using var fixture = new Fixture();
+            const string user = "请补齐后端依赖并将验证码迁移到 Redis，保留已有接口格式。";
+            string[] fragments = ["验证码改为", "Redis 存储", "保留 120 秒有效、一次消费和自动过期", "注册新增必填手机号", "通过业务校验和数据库唯一约束拦截"];
+            var reply = "已完成：\n- " + string.Join("\n- ", fragments);
+            fixture.Add("rich-text", [new("user", user), new("assistant", reply)]);
+            var snapshot = new WindowSnapshot(new[] { Text(user) }.Concat(fragments.Select(Text)).ToList(), true);
+            SelfTests.Assert(fragments.All(f => ChatText.Normalize(f).Length < 32), "fixture needs short UIA nodes");
+            var result = CodexContext.Resolve(snapshot, fixture.Home);
+            SelfTests.Assert(result.ThreadId == "rich-text" && result.Messages[^1].Text == reply, "fragmented reply was not matched");
+            fixture.Add("identical-fork", [new("user", user), new("assistant", reply)]);
+            Reject(() => CodexContext.Resolve(snapshot, fixture.Home));
+        });
+        check("Codex fragmented evidence cannot inflate overlaps or combine separate replies", () =>
+        {
+            const string shortReply = "ABCDEFGHIJKLMNOPQRSTUVWX";
+            var overlapping = new[] { shortReply, shortReply, shortReply[..16], shortReply[8..] };
+            var chat = new StoredChat("a", "", "", [new("user", "user request"), new("assistant", shortReply)]);
+            SelfTests.Assert(CodexContext.Match(chat, overlapping).Assistant == 0, "overlapping fragments inflated evidence");
+            var split = chat with { Messages = [new("assistant", "ABCDEFGHIJKLMNOP"), new("assistant", "QRSTUVWXYZ012345")] };
+            SelfTests.Assert(CodexContext.Match(split, ["ABCDEFGHIJKLMNOP", "QRSTUVWXYZ012345"]).Assistant == 0,
+                "fragments from separate replies were combined");
+        });
+        check("Codex short rich text fragments can distinguish a shared fork prefix", () =>
+        {
+            using var fixture = new Fixture();
+            const string detail = "这个分支要求保持原有数据库结构并且禁止新增任何字段和额外的接口";
+            fixture.Add("current", [.. Messages(), new("assistant", detail)]);
+            fixture.Add("prefix", Messages());
+            var snapshot = Snapshot() with { Texts = [.. Snapshot().Texts, Text(detail[..26]), Text(detail[26..])] };
+            SelfTests.Assert(CodexContext.Resolve(snapshot, fixture.Home).ThreadId == "current", "fragmented fork detail ignored");
+        });
         check("newly persisted chats in the same project are discovered without cached indexes", () =>
         {
             using var fixture = new Fixture();

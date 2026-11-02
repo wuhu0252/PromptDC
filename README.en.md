@@ -4,7 +4,15 @@
 
 A Windows prompt enhancer: select text in an input field and press **Ctrl+Alt+E** to enhance it with your chosen provider and replace the selection. It does not press Enter or submit chat messages. Automatic context supports local chats in Codex and the adapted official DeepSeek Harness Windows desktop build.
 
-The current version is **0.3.9**, with concise rewrites, a separate multi-provider login page, 30-day saved sessions, Harness context support and an application icon.
+The latest published version is **0.3.9**. The current source also includes unreleased context-matching and consistency fixes; see the [changelog](CHANGELOG.md).
+
+## Login in the current source checkout
+
+The app first shows a separate login page when signed out. Select DeepSeek, Kimi, Doubao, Zhipu or OpenAI (GPT), choose/edit a model, enter its API key and click Login (automatic verification). Only successful verification opens the main workspace; it contains login status, Logout and preferences, with no API-key entry controls. Failed login stays on the login page; logout or expiry returns to it. A valid saved session opens the workspace directly after restarting. A real generation request may incur charges. Only a successful HTTP response with valid JSON, finish_reason=stop and nonempty final text creates a login. The fixed verification text never includes chat history. Official standard API endpoints are used; web subscriptions, Coding Plan endpoints and custom proxies are not configured.
+
+Keys are always masked during entry and never reloaded into the UI. Both ProtectedKey and the new ProtectedSession are encrypted with Windows current-user DPAPI in `%LOCALAPPDATA%\PromptDC\settings.json`. Provider defaults to DeepSeek; ProtectedSession defaults to an empty string. The encrypted session binds provider, model, key hash and UTC login time. Login lasts exactly 30 days from successful verification, survives restarts, and is never renewed by use or saving preferences. Startup, a minute timer and enhancement checks enforce expiry. Logout/expiry clears the saved key and session, retaining preferences. A disk cleanup failure is reported explicitly with a retry button on the login page. Changing the provider or model clears the typed key before verification. Legacy credentials require re-entry and verification; they do not count as a login.
+
+LoginTests extends --self-test with simulated provider requests and session boundaries. LoginUiTests extends --smoke-test with synthetic settings and mocked HTTP, covering login, failure, restart, logout, migration, expiration and save failure without accessing real credentials.
 
 ## Download and use
 
@@ -18,7 +26,7 @@ PowerShell checksum command: `Get-FileHash .\PromptDC-0.3.9-win-x64.zip -Algorit
 
 For browsers and unsupported applications, uncheck “自动读取聊天上下文（Codex / Harness）” (Automatic chat context) and save. Only selected text is enhanced.
 
-Minimizing keeps the taskbar button. Closing hides the window to the system tray; double-click its icon to restore, or exit through its context menu. Exit the old version before upgrading. Failures report a reason and preserve the original. Generated text that was not pasted is available in “最近结果” (Recent result), only in the current process memory.
+Minimizing keeps the taskbar button. Closing while logged in hides the window to the system tray; closing while signed out exits the app; double-click its icon to restore, or exit through its context menu. Exit the old version before upgrading. Failures report a reason and preserve the original. Generated text that was not pasted is available in “最近结果” (Recent result), only in the current process memory.
 
 ## Features and settings
 
@@ -27,7 +35,7 @@ Minimizing keeps the taskbar button. Closing hides the window to the system tray
 - Preserve necessary terminology and translate informal requests into precise technical language. Add implicit technical goals or handling requirements only when directly supported by the intent or confirmed context and useful for clarity or execution. Avoid jargon padding, unrequested implementation choices and presenting hypotheses as facts.
 - “额外偏好” (Extra preferences) supplies rewrite instructions on every enhancement, such as “Use Chinese, aim for 100 characters, no headings”. Click Save preferences to apply; leaving it blank still uses concise defaults. This controls the rewritten prompt, not the receiving AI's response settings. Put one-off tasks in the selected text.
 - Automatic context defaults to enabled and requires a unique match of the current editor, conversation area and local records. Titles, input counts and modification times alone cannot establish the current conversation.
-- Fixed endpoint: `https://api.deepseek.com/chat/completions`; default `deepseek-flash`, thinking disabled, non-streaming, temperature 0.3, max_tokens 8192. Input limit: 24,000 UTF-16 characters; request timeout: 90 seconds.
+- DeepSeek endpoint: `https://api.deepseek.com/chat/completions`; default `deepseek-flash`, thinking disabled, non-streaming, temperature 0.3, max_tokens 8192. Other providers use their own official endpoints and parameters. Input limit: 24,000 UTF-16 characters; request timeout: 90 seconds.
 - For “Where is this project and how do I start it?”, the enhancer asks the receiving AI to inspect the current conversation and workspace, without inventing names or paths. PromptDC does not scan project source or verify that recorded paths still exist.
 
 | Setting or data | Location |
@@ -42,13 +50,15 @@ Defaults adapt to the current user without developer-specific paths. Environment
 
 After the hotkey, PromptDC identifies the foreground application and focused editor, following UI Automation Raw View ancestors to its conversation area. This avoids sidebar, search and embedded-page inputs. An isolated worker reads UI and local records with a 15-second deadline; requests contain only focus options and an ephemeral editor identity. Conversation, editor, selection and input state are checked again before pasting. Ambiguity, window switches or focus changes within the same window prevent replacement.
 
-**Codex**: scopes the area through ProseMirror, ComposerLayoutBody and `group/thread-scroll-layout` ancestors, including restored windows. It reads the highest-numbered `state_*.sqlite` using Windows `winsqlite3` in read-only mode, matching unarchived vscode/cli local chats and their `sessions` / `archived_sessions` logs. It does not guess from inherited `CODEX_THREAD_ID`. Adapted UI version: 26.1023.6123.0.
+**Codex**: scopes the area through ProseMirror, ComposerLayoutBody and `group/thread-scroll-layout` ancestors, including restored windows. It reads the highest-numbered `state_*.sqlite` using Windows `winsqlite3` in read-only mode, matching unarchived vscode/cli local chats and their `sessions` / `archived_sessions` logs. It does not guess from inherited `CODEX_THREAD_ID`. Adapted UI version: 26.1023.6123.0; local conversation resolution also verified on 26.1027.3384.0.
+
+Markdown list items in the transcript remain valid evidence. User fragments require at least 6 normalized characters. Assistant evidence may combine exact fragments of at least 8 characters covering at least 32 distinct characters in one final reply; duplicate and overlapping spans count once. This supports replies split by bold text, links and lists while still rejecting insufficient or ambiguous evidence.
 
 **Codex before the first message is sent**: the new-chat page uses `group/home-composer-layout`, distinct from a stored conversation. After verifying that the focused editor belongs to that page, an ephemeral UI editor identity is revalidated before pasting. The app explicitly reports a new chat with no history and sends only the selected text; it never reads another chat in the same project or uses the project name as a conversation ID. Once the first message creates a stored conversation, index/log matching resumes and still requires sufficient user/assistant evidence. Page changes, editor switches and draft-to-thread transitions prevent pasting. Unrecognized new-chat pages also preserve the original. No settings were added.
 
-**DeepSeek Harness**: checks process filename, product name and version; currently only Windows **0.2.1-rc.3** is accepted. It locates the `dsh-app://app/` page and editor/body ancestors, matching v4 `jsonl` / `jsonl.zstd` data records. It reads source=user messages and the last text-only assistant reply of completed turns, excluding credentials, runtimes, skills, tool calls and reasoning. User text (at least 2 normalized characters) and assistant fragments (at least 8 characters each, at least 32 in total supporting one reply) are both required. One conversation with a completed reply can suffice. Indistinguishable records or forks fail; drafts are excluded structurally, preserving identical historical evidence.
+**DeepSeek Harness**: checks process filename, product name and version; currently only Windows **0.2.1-rc.3** is accepted. It locates the `dsh-app://app/` page and editor/body ancestors, matching v4 `jsonl` / `jsonl.zstd` data records. It reads source=user messages and the last text-only assistant reply of completed turns, excluding credentials, runtimes, skills, tool calls and reasoning. User text (at least 2 normalized characters) and assistant fragments (at least 8 characters each, at least 32 distinct covered characters in one reply, counting overlaps once) are both required. One conversation with a completed reply can suffice. Indistinguishable records or forks fail; drafts are excluded structurally, preserving identical historical evidence.
 
-Codex reads each candidate log backwards in blocks, stopping after the latest 20 user messages/assistant final replies (each counts as one message, not 20 chats). All candidates still participate in recent-evidence matching; ambiguity or insufficient evidence fails. Full file sizes no longer cause rejection. Actual reads are limited to 32 MB per candidate and 64 MB overall; tool-heavy logs can still hit these limits and fail safely. At most 200 candidates are checked. Harness reading is unchanged: file, decompression and window limits are 32 MB each, with 64 MB total decompression. Context contains at most the latest 20 messages, 20,000 UTF-16 characters overall and 5,000 per message. Some common credential formats and the current API Key are redacted from history, but not every sensitive value can be detected. Selected text and matched history are sent to DeepSeek; selected text is sent as supplied, so review it for sensitive content.
+Codex reads each candidate log backwards in blocks, stopping after the latest 20 user messages/assistant final replies (each counts as one message, not 20 chats). All candidates still participate in recent-evidence matching; ambiguity or insufficient evidence fails. Full file sizes no longer cause rejection. Actual reads are limited to 32 MB per candidate and 64 MB overall; tool-heavy logs can still hit these limits and fail safely. At most 200 candidates are checked. Harness reading is unchanged: file, decompression and window limits are 32 MB each, with 64 MB total decompression. Context contains at most the latest 20 messages, 20,000 UTF-16 characters overall and 5,000 per message. Some common credential formats and the current API Key are redacted from history, but not every sensitive value can be detected. Selected text and matched history are sent to the currently logged-in provider; selected text is sent as supplied, so review it for sensitive content.
 
 ## Stack and files
 
@@ -61,7 +71,8 @@ C# / .NET 8 / Windows Forms; WPF references provide UI Automation. Windows APIs 
 | `SelectionEnhancer.cs` | Selection capture, enhancement, revalidation, replacement and clipboard restoration |
 | `Native.cs` | Win32, hotkeys and input/focus protection |
 | `Settings.cs` | Defaults, atomic saves and DPAPI |
-| `DeepSeekClient.cs` | Editing rules, API requests and response validation |
+| `DeepSeekClient.cs` / `ModelProviders.cs` | Editing rules, provider endpoints/parameters and response validation |
+| `LoginSession.cs` / `LoginTests.cs` / `LoginUiTests.cs` | Protected login sessions, expiry and simulated login checks |
 | `GlobalUsings.cs` | Shared namespace imports |
 | `Context/ContextWorker.cs` | Context types, process protocol, timeout and diagnostics |
 | `Context/ComposerTarget.cs` | Editor ownership, identity and shared class matching |
@@ -113,7 +124,7 @@ Explicit options include `--diagnose-context <HWND>` (read-only diagnosis) and `
 .\scripts\package-release.ps1
 ```
 
-The first produces `dist/PromptDC/PromptDC.exe` and complete dependencies, including the runtime. `-FrameworkDependent` requires an installed matching .NET Desktop Runtime and is unsuitable for a general “only enter your Key” package. Both scripts accept `-OutputDirectory`.
+The first produces `dist/PromptDC/PromptDC.exe` and complete dependencies, including the runtime. The destination must be new or empty; use `-OutputDirectory` for subsequent builds to avoid mixing old runtimes or personal files. `-FrameworkDependent` requires an installed matching .NET Desktop Runtime and is unsuitable for a general “only enter your Key” package. Both scripts accept `-OutputDirectory`.
 
 The second uses the csproj version to produce `dist/releases/PromptDC-0.3.9-win-x64.zip` and `SHA256SUMS.txt`, publishes into fresh staging, checks runtime/required files, rejects settings, credentials, debugging/development files, includes both READMEs and third-party notices, and finally removes its staging directory. Existing attachments are never overwritten. The ZIP contains the complete `PromptDC/` folder; the script does not create tags or upload a Release.
 
@@ -129,12 +140,3 @@ Third-party components retain their own licenses and copyright notices; see [THI
 
 - Startup still needs verification on clean Windows x64 without an SDK/runtime; development-machine checks cannot establish this result.
 - Other Codex/Harness UI versions and systems need separate verification; unverified Harness versions are rejected for automatic context.
-
-
-## Login in the current source checkout
-
-The app first shows a separate login page when signed out. Select DeepSeek, Kimi, Doubao, Zhipu or OpenAI (GPT), choose/edit a model, enter its API key and click Login (automatic verification). Only successful verification opens the main workspace; it contains login status, Logout and preferences, with no API-key entry controls. Failed login stays on the login page; logout or expiry returns to it. A valid saved session opens the workspace directly after restarting. A real generation request may incur charges. Only a successful HTTP response with valid JSON, finish_reason=stop and nonempty final text creates a login. The fixed verification text never includes chat history. Official standard API endpoints are used; web subscriptions, Coding Plan endpoints and custom proxies are not configured.
-
-Keys are always masked during entry and never reloaded into the UI. Both ProtectedKey and the new ProtectedSession are encrypted with Windows current-user DPAPI in `%LOCALAPPDATA%\PromptDC\settings.json`. Provider defaults to DeepSeek; ProtectedSession defaults to an empty string. The encrypted session binds provider, model, key hash and UTC login time. Login lasts exactly 30 days from successful verification, survives restarts, and is never renewed by use or saving preferences. Startup, a minute timer and enhancement checks enforce expiry. Logout/expiry clears the saved key and session, retaining preferences. A disk write failure is reported explicitly. Legacy credentials require re-entry and verification; they do not count as a login.
-
-LoginTests extends --self-test with simulated provider requests and session boundaries. LoginUiTests extends --smoke-test with synthetic settings and mocked HTTP, covering login, failure, restart, logout, migration, expiration and save failure without accessing real credentials.

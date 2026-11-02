@@ -22,7 +22,17 @@ internal static class SettingsStore
     public static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PromptDC");
     public static string FilePath => Path.Combine(Folder, "settings.json");
     public static Settings Load() => File.Exists(FilePath)
-        ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new() : new();
+        ? Sanitize(JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new()) : new();
+
+    // JSON null overrides C# property initializers. Recover optional string fields
+    // before login, timer and UI code dereference them.
+    internal static Settings Sanitize(Settings value) => value with
+    {
+        ProtectedKey = value.ProtectedKey ?? "", ProtectedSession = value.ProtectedSession ?? "",
+        Provider = value.Provider ?? "DeepSeek", Model = value.Model ?? "deepseek-flash",
+        Mode = value.Mode ?? "自动识别", Hotkey = value.Hotkey ?? "Ctrl+Alt+E",
+        Instructions = value.Instructions ?? ""
+    };
 
     public static void Save(Settings value, string? path = null)
     {

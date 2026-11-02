@@ -10,6 +10,12 @@ $outputPath = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
     [System.IO.Path]::GetFullPath((Join-Path $projectRoot $OutputDirectory))
 }
 $selfContained = if ($FrameworkDependent) { 'false' } else { 'true' }
+if (Test-Path -LiteralPath $outputPath) {
+    if (-not (Test-Path -LiteralPath $outputPath -PathType Container) -or
+        @(Get-ChildItem -LiteralPath $outputPath -Force).Count -gt 0) {
+        throw 'Publish output must be a new or empty directory. Choose -OutputDirectory to avoid mixing old builds, runtimes or user files.'
+    }
+}
 dotnet publish (Join-Path $projectRoot 'PromptDC.csproj') -c Release -r win-x64 --self-contained $selfContained -o $outputPath -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
 foreach ($document in @('LICENSE', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md')) {

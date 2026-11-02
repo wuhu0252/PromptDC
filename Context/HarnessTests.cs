@@ -11,6 +11,23 @@ internal static class HarnessTests
     private const string Reply = "你好，我可以协助你理解项目代码、排查问题，并结合已经确认的要求说明项目位置及启动步骤。";
     internal static void Register(Action<string, Action> check)
     {
+        check("Harness does not count overlapping rich text fragments more than once", () =>
+        {
+            using var fixture = new Fixture();
+            const string shortReply = "ABCDEFGHIJKLMNOPQRSTUVWX";
+            fixture.Add("session-a", Rows("session-a", answer: shortReply));
+            Reject(() => HarnessContext.Resolve(new([new("user", User), new("assistant", shortReply),
+                new("assistant", shortReply[..16]), new("assistant", shortReply[8..])], true), fixture.Home));
+        });
+        check("Harness combines disjoint fragments within one completed reply", () =>
+        {
+            using var fixture = new Fixture();
+            const string reply = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            fixture.Add("session-a", Rows("session-a", answer: reply));
+            var result = HarnessContext.Resolve(new([new("user", User), new("assistant", reply[..18]),
+                new("assistant", reply[18..])], true), fixture.Home);
+            SelfTests.Assert(result.ThreadId == "session-a", "fragmented final reply rejected");
+        });
         check("Harness resolves compressed histories under two different default user homes", () =>
         {
             var root = Path.Combine(Path.GetTempPath(), "PromptDC-portable-harness-" + Guid.NewGuid());

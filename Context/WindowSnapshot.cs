@@ -75,7 +75,9 @@ internal static class WindowCapture
             var type = data.ControlType;
             if (data.IsPassword || type == ControlType.Edit || data.AutomationId.Contains("composer", StringComparison.OrdinalIgnoreCase)) return "input";
             if (type == ControlType.Button) return "button";
-            if (type == ControlType.ListItem) return "listitem";
+            // Markdown bullets and numbered steps are ListItems too. The verified
+            // conversation scope already excludes the sidebar; keep walking so a
+            // list inside a menu, editor or navigation wrapper is still excluded.
             if (type == ControlType.Menu || type == ControlType.MenuItem || type == ControlType.ToolBar
                 || type == ControlType.TabItem || type == ControlType.TreeItem
                 || data.AutomationId.Contains("sidebar", StringComparison.OrdinalIgnoreCase)) return "navigation";

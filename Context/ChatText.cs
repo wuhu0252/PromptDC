@@ -6,6 +6,23 @@ namespace PromptDC;
 // Provider-independent text matching, context budgets and credential redaction.
 internal static class ChatText
 {
+    // Inputs are normalized. Count distinct covered characters in one final reply;
+    // overlapping accessibility nodes must not inflate evidence for either adapter.
+    internal static bool HasAssistantEvidence(string text, IEnumerable<string> anchors)
+    {
+        var spans = anchors.Where(anchor => anchor.Length >= 8)
+            .Select(anchor => (Start: text.IndexOf(anchor, StringComparison.Ordinal), Length: anchor.Length))
+            .Where(span => span.Start >= 0).OrderBy(span => span.Start);
+        var end = 0; var covered = 0;
+        foreach (var span in spans)
+        {
+            var next = span.Start + span.Length;
+            covered += Math.Max(0, next - Math.Max(end, span.Start));
+            end = Math.Max(end, next);
+            if (covered >= 32) return true;
+        }
+        return false;
+    }
     internal static string Normalize(string text)
     {
         var result = new StringBuilder(text.Length);
