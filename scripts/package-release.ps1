@@ -28,7 +28,7 @@ try {
     if (-not $runtime.runtimeOptions.includedFrameworks -or $runtime.runtimeOptions.framework -or $runtime.runtimeOptions.frameworks) {
         throw 'The release must include the .NET runtime'
     }
-    foreach ($required in @('PromptDC.exe', 'PromptDC.dll', 'ZstdSharp.dll', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Windows.Forms.dll', 'UIAutomationClient.dll', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md')) {
+    foreach ($required in @('PromptDC.exe', 'PromptDC.dll', 'ZstdSharp.dll', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Windows.Forms.dll', 'UIAutomationClient.dll', 'LICENSE', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $appPath $required) -PathType Leaf)) { throw "Missing release file: $required" }
     }
     $forbidden = Get-ChildItem -LiteralPath $appPath -Recurse -Force | Where-Object {

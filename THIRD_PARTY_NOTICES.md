@@ -1,5 +1,13 @@
 # Third-party notices
 
+PromptDC's own code is covered by the root MIT `LICENSE`. Third-party code retains its original copyrights and licenses.
+
+## Bundled .NET runtime
+
+Self-contained Windows packages include .NET runtime components. The publishing script copies the original `LICENSE` / `LICENSE.TXT` and any `THIRD-PARTY-NOTICES.TXT` supplied by each runtime pack into `licenses/<framework>-<version>/`, using the versions recorded in `PromptDC.runtimeconfig.json`.
+
+These files preserve the runtime packs' own notices and are separate from PromptDC's license.
+
 ## ZstdSharp.Port 0.8.8
 
 Source: https://github.com/oleg-st/ZstdSharp
