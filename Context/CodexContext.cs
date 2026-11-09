@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ZstdSharp;
 
 namespace PromptDC;
 
@@ -11,6 +12,8 @@ internal sealed record MatchDiagnostic(int Texts, int Anchors, List<int> AnchorL
 internal static class CodexContext
 {
     private const int MaxChats = 200;
+    private const long MaxFileBytes = 32 * 1024 * 1024;
+    private const long MaxTotalBytes = 64 * 1024 * 1024;
     public static ChatContext Resolve(WindowSnapshot snapshot, string home, Action<MatchDiagnostic>? trace = null)
     {
         var anchors = GetAnchors(snapshot);
@@ -23,7 +26,7 @@ internal static class CodexContext
         var rows = database.Query("SELECT id, title, cwd, rollout_path FROM threads WHERE archived = 0 AND source IN ('vscode', 'cli') LIMIT 201");
         if (rows.Count > MaxChats) throw new InvalidOperationException("本机待核对聊天过多，暂时无法可靠定位，原文未替换。");
         var chats = new List<StoredChat>();
-        long remainingBytes = 64 * 1024 * 1024;
+        long remainingBytes = MaxTotalBytes;
         foreach (var row in rows)
         {
             var file = ValidateRolloutPath(home, row[3]);
@@ -99,19 +102,50 @@ internal static class CodexContext
         path = Path.GetFullPath(path);
         var allowed = new[] { "sessions", "archived_sessions" }.Any(folder =>
             path.StartsWith(Path.GetFullPath(Path.Combine(home, folder)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-        if (!allowed || !path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+        var plain = path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase);
+        if (!allowed || !(plain || path.EndsWith(".jsonl.zst", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("聊天索引中存在不可读取的本机记录，已停止定位，原文未替换。");
+        // Codex can compress an inactive rollout without updating its index path.
+        // Only the exact sibling is a replacement; never search by title or skip a candidate.
+        if (plain && !File.Exists(path) && File.Exists(path + ".zst")) return path + ".zst";
+        if (!File.Exists(path))
             throw new InvalidOperationException("聊天索引中存在不可读取的本机记录，已停止定位，原文未替换。");
         return path;
     }
     internal static List<ChatMessage> ReadMessages(string path)
     {
-        long remainingBytes = 64 * 1024 * 1024;
+        long remainingBytes = MaxTotalBytes;
         return ReadMessages(path, ref remainingBytes);
     }
     private static List<ChatMessage> ReadMessages(string path, ref long remainingBytes)
     {
-        var messages = new List<ChatMessage>();
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (!path.EndsWith(".jsonl.zst", StringComparison.OrdinalIgnoreCase)) return ReadMessages(stream, ref remainingBytes);
+        try
+        {
+            using var decoded = new DecompressionStream(stream);
+            decoded.SetParameter(ZstdSharp.Unsafe.ZSTD_dParameter.ZSTD_d_windowLogMax, 25);
+            using var output = new MemoryStream();
+            var buffer = new byte[64 * 1024];
+            int count;
+            while ((count = decoded.Read(buffer)) != 0)
+            {
+                if (output.Length + count > MaxFileBytes || remainingBytes < count) throw ReadLimit();
+                remainingBytes -= count;
+                output.Write(buffer, 0, count);
+            }
+            // Compression needs a forward decode, but parsing must retain the same recent
+            // message, Unicode boundary and incomplete-JSON-tail semantics as plain logs.
+            // Its decoded bytes already consumed the shared budget; do not charge twice.
+            return ReadMessages(output, ref remainingBytes, chargeReadBytes: false);
+        }
+        catch (Exception e) when (e is ZstdException or EndOfStreamException)
+        { throw new InvalidOperationException("Codex 压缩记录未完整写入或已损坏，请稍后重试，原文未替换。"); }
+    }
+    private static InvalidOperationException ReadLimit() => new("读取近期聊天记录达到安全上限，无法可靠定位，原文未替换。");
+    private static List<ChatMessage> ReadMessages(Stream stream, ref long remainingBytes, bool chargeReadBytes = true)
+    {
+        var messages = new List<ChatMessage>();
         // Seek backwards in bounded blocks: old tools and old conversation prefixes
         // need not be loaded merely to keep the latest 20 actual chat messages.
         using var pending = new MemoryStream();
@@ -122,9 +156,9 @@ internal static class CodexContext
         while (position > 0)
         {
             var count = (int)Math.Min(buffer.Length, position);
-            if (remainingBytes < count || fileBytes + count > 32 * 1024 * 1024)
-                throw new InvalidOperationException("读取近期聊天记录达到安全上限，无法可靠定位，原文未替换。");
-            remainingBytes -= count; fileBytes += count;
+            if ((chargeReadBytes && remainingBytes < count) || fileBytes + count > MaxFileBytes) throw ReadLimit();
+            if (chargeReadBytes) remainingBytes -= count;
+            fileBytes += count;
             position -= count;
             stream.Position = position;
             stream.ReadExactly(buffer.AsSpan(0, count));

@@ -10,8 +10,10 @@ internal sealed record ChatContext(string ThreadId, string Title, string Project
     public string StorageIdentity { get; init; } = "";
     public string ComposerIdentity { get; init; } = "";
     public bool IsNewChat { get; init; }
+    public bool HistoryUnavailable { get; init; }
     public string ProviderName => Provider == "harness" ? "DeepSeek Harness" : "Codex";
-    public bool SameConversation(ChatContext other) => Provider == other.Provider && IsNewChat == other.IsNewChat && ThreadId == other.ThreadId
+    public bool SameConversation(ChatContext other) => Provider == other.Provider && IsNewChat == other.IsNewChat
+        && HistoryUnavailable == other.HistoryUnavailable && ThreadId == other.ThreadId
         && string.Equals(StorageIdentity, other.StorageIdentity, StringComparison.OrdinalIgnoreCase)
         && ComposerIdentity == other.ComposerIdentity;
 }
@@ -79,7 +81,8 @@ internal static class ContextWorker
             var context = await ResolveAsync(window == 0 ? Native.GetForegroundWindow() : window, CancellationToken.None,
                 requireFocus: false);
             SelfTests.WriteReport("context-diagnostic.json", new { Success = true, Error = "", context.ThreadId,
-                context.Provider, context.IsNewChat, MessageCount = context.Messages.Count, context.Evidence, ElapsedMilliseconds = timer.ElapsedMilliseconds });
+                context.Provider, context.IsNewChat, context.HistoryUnavailable, MessageCount = context.Messages.Count,
+                context.Evidence, ElapsedMilliseconds = timer.ElapsedMilliseconds });
         }
         catch (Exception e)
         {
@@ -124,8 +127,12 @@ internal static class ContextWorker
             else
             {
                 var snapshot = WindowCapture.Capture(window, target);
-                reply = new(true, "", CodexContext.Resolve(snapshot, CodexHome, value => diagnostic = value)
-                    with { ComposerIdentity = target.Identity }, snapshot.Texts.Count, diagnostic, target.Identity);
+                // Capture and editor identification stay outside the fallback: only an
+                // unavailable stored history can degrade to selection-only enhancement.
+                var context = CodexHistoryFallback.Resolve(snapshot, target.Identity,
+                    string.Join(",", target.Scope.GetRuntimeId()),
+                    () => CodexContext.Resolve(snapshot, CodexHome, value => diagnostic = value));
+                reply = new(true, "", context, snapshot.Texts.Count, diagnostic, target.Identity);
             }
         }
         catch (InvalidOperationException e) { reply = new(false, e.Message, null, Diagnostic: diagnostic); }

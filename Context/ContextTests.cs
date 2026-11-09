@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
+using ZstdSharp;
 
 namespace PromptDC;
 
@@ -96,6 +98,83 @@ internal static class ContextTests
             File.WriteAllText(path, Line("user", "有效消息") + "\nmalformed}\n" + Line("assistant", "完整答复", "final_answer"));
             Reject(() => CodexContext.ReadMessages(path));
         });
+        check("Codex resolves compressed rollouts through old and explicit index paths", () =>
+        {
+            foreach (var explicitPath in new[] { false, true })
+            {
+                using var fixture = new Fixture();
+                fixture.Add("compressed-current", Messages());
+                fixture.Compress("compressed-current", explicitPath);
+                var plain = fixture.FilePath("compressed-current");
+                var path = explicitPath ? plain + ".zst" : plain;
+                SelfTests.Assert(CodexContext.ValidateRolloutPath(fixture.Home, path) == plain + ".zst", "compressed sibling was not located");
+                var result = CodexContext.Resolve(Snapshot(), fixture.Home);
+                SelfTests.Assert(result.ThreadId == "compressed-current" && result.Messages.SequenceEqual(Messages()), "compressed history was not matched");
+            }
+        });
+        check("Codex old index paths prefer existing plain logs over compressed siblings", () =>
+        {
+            using var fixture = new Fixture();
+            fixture.Add("current", Messages());
+            var path = fixture.FilePath("current");
+            File.WriteAllBytes(path + ".zst", [1, 2, 3, 4]);
+            SelfTests.Assert(CodexContext.ValidateRolloutPath(fixture.Home, path) == path
+                && CodexContext.Resolve(Snapshot(), fixture.Home).ThreadId == "current", "stale compressed sibling overrode the indexed plain log");
+        });
+        check("Codex compressed rollouts preserve recent messages, Unicode boundaries and incomplete JSON tails", () =>
+        {
+            using var fixture = new Fixture();
+            fixture.Add("unicode", []);
+            var path = fixture.FilePath("unicode");
+            var first = "中文🙂" + new string('文', 70000);
+            var recent = Enumerable.Range(0, 18).Select(i => new ChatMessage("user", "后续消息" + i)).ToList();
+            var text = Line("user", "不应进入最近二十条") + "\n" + Line("user", first).Replace("\\u6587", "文", StringComparison.OrdinalIgnoreCase)
+                + "\r\n" + Line("assistant", "最新完整答复🙂", "final_answer") + "\n"
+                + string.Join("\n", recent.Select(m => Line(m.Role, m.Text))) + "\n{\"type\":\"response_item\"";
+            WriteCompressed(path + ".zst", Encoding.UTF8.GetBytes(text));
+            var messages = CodexContext.ReadMessages(path + ".zst");
+            SelfTests.Assert(messages.Count == 20 && messages[0].Text == first && messages[1].Text == "最新完整答复🙂"
+                && messages[^1].Text == recent[^1].Text, "compressed decoding changed the recent message or Unicode semantics");
+        });
+        check("Codex compressed candidates still participate in fork ambiguity", () =>
+        {
+            using var fixture = new Fixture();
+            fixture.Add("plain", Messages()); fixture.Add("compressed", Messages());
+            fixture.Compress("compressed");
+            Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
+        });
+        check("Codex rejects truncated, corrupt and malformed compressed candidates", () =>
+        {
+            using var fixture = new Fixture();
+            fixture.Add("current", Messages()); fixture.Compress("current");
+            var path = fixture.FilePath("current") + ".zst";
+            var valid = File.ReadAllBytes(path);
+            File.WriteAllBytes(path, valid[..^1]);
+            Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
+            var corrupt = (byte[])valid.Clone(); corrupt[^1] ^= 1;
+            File.WriteAllBytes(path, corrupt);
+            Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
+            WriteCompressed(path, Encoding.UTF8.GetBytes(Line("user", "有效用户消息") + "\nmalformed}\n" + Line("assistant", "完整答复", "final_answer")));
+            Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
+        });
+        check("Codex bounds decompressed data and counts compressed candidates once toward the shared budget", () =>
+        {
+            using var fixture = new Fixture();
+            fixture.Add("current", TwentyMessages()); fixture.Add("other", TwentyMessages(false));
+            const int limit = 32 * 1024 * 1024;
+            foreach (var id in new[] { "current", "other" })
+            {
+                var path = fixture.FilePath(id);
+                WriteCompressed(path + ".zst", PadLog(File.ReadAllBytes(path), limit));
+                File.Delete(path);
+            }
+            SelfTests.Assert(CodexContext.Resolve(Snapshot(), fixture.Home).ThreadId == "current", "64 MB boundary was rejected or decoded bytes were charged twice");
+            fixture.Add("extra", [new("user", "超过累计预算的另一条消息")]); fixture.Compress("extra");
+            Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
+            var current = fixture.FilePath("current") + ".zst";
+            WriteCompressed(current, PadLog(Encoding.UTF8.GetBytes(string.Join("\n", TwentyMessages().Select(m => Line(m.Role, m.Text)))), limit + 1));
+            Reject(() => CodexContext.ReadMessages(current));
+        });
         check("Codex recent identical fork histories remain ambiguous", () =>
         {
             using var fixture = new Fixture();
@@ -174,6 +253,8 @@ internal static class ContextTests
             using var fixture = new Fixture(); fixture.Add("a", Messages()); fixture.Add("missing", Messages(), "vscode", false);
             Reject(() => CodexContext.Resolve(Snapshot(), fixture.Home));
             Reject(() => CodexContext.ValidateRolloutPath(fixture.Home, Path.Combine(fixture.Home, "..", "outside.jsonl")));
+            Reject(() => CodexContext.ValidateRolloutPath(fixture.Home, Path.Combine(fixture.Home, "..", "outside.jsonl.zst")));
+            Reject(() => CodexContext.ValidateRolloutPath(fixture.Home, Path.Combine(fixture.Home, "sessions", "unsupported.jsonl.zstd")));
         });
         check("transcript excludes tools, system instructions, reasoning and progress messages", () =>
         {
@@ -208,6 +289,22 @@ internal static class ContextTests
         new("assistant", "已经确认本次只排查登录接口的服务器错误，先检查异常日志和调用链，保持已有返回结构，不增加其他功能。")
     ];
     private static WindowText Text(string text) => new("ControlType.Text", text, 500, 80, false);
+    private static List<ChatMessage> TwentyMessages(bool current = true) =>
+        [.. Enumerable.Range(0, 18).Select(i => new ChatMessage("user", "其他合成消息" + i)),
+            .. current ? Messages() : new List<ChatMessage> { new("user", "另一条合成需求"), new("assistant", "另一条合成答复") }];
+    private static byte[] PadLog(byte[] recent, int size)
+    {
+        var bytes = new byte[size];
+        Array.Fill(bytes, (byte)'\n');
+        recent.CopyTo(bytes, size - recent.Length);
+        return bytes;
+    }
+    private static void WriteCompressed(string path, byte[] bytes)
+    {
+        using var compressor = new Compressor();
+        compressor.SetParameter(ZstdSharp.Unsafe.ZSTD_cParameter.ZSTD_c_checksumFlag, 1);
+        File.WriteAllBytes(path, compressor.Wrap(bytes).ToArray());
+    }
     private static WindowSnapshot Snapshot() => new(Messages().Select(m => Text(m.Text)).ToList(), true);
     private static void Reject(Action action)
     {
@@ -239,10 +336,18 @@ internal static class ContextTests
         }
         public void Add(string id, List<ChatMessage> messages, string source = "vscode", bool writeFile = true)
         {
-            var path = Path.Combine(Home, "sessions", id + ".jsonl");
+            var path = FilePath(id);
             if (writeFile) File.WriteAllLines(path, messages.Select(m => Line(m.Role, m.Text, m.Role == "assistant" ? "final_answer" : null)));
             static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
             Sql($"INSERT INTO threads VALUES ({Quote(id)}, '同名标题', 'test-project', {Quote(path)}, 0, {Quote(source)})");
+        }
+        public string FilePath(string id) => Path.Combine(Home, "sessions", id + ".jsonl");
+        public void Compress(string id, bool updateIndex = false)
+        {
+            var path = FilePath(id);
+            WriteCompressed(path + ".zst", File.ReadAllBytes(path));
+            File.Delete(path);
+            if (updateIndex) Sql($"UPDATE threads SET rollout_path = '{(path + ".zst").Replace("'", "''")}' WHERE id = '{id.Replace("'", "''")}'");
         }
         public void Dispose()
         {

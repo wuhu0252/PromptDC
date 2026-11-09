@@ -4,7 +4,7 @@ namespace PromptDC;
 // Runs only in its own test window; never touches another app's text fields.
 internal sealed class SmokeTests : Form
 {
-    private readonly RichTextBox editor = new() { Dock = DockStyle.Fill };
+    private readonly CopyTestEditor editor = new() { Dock = DockStyle.Fill };
     private readonly TextBox otherEditor = new() { Dock = DockStyle.Top, Text = "前缀 优化这段代码 后缀" };
     private readonly TextBox search = new() { Dock = DockStyle.Top, Text = "另一个搜索输入框" };
     private readonly InputGuard guard = new();
@@ -31,6 +31,7 @@ internal sealed class SmokeTests : Form
         {
             backup = SelectionEnhancer.CaptureClipboard();
             await LoginUiTests.RunAsync(Check);
+            await Task.Delay(600); // Drain activation events from disposed login-test windows.
             Activate(); Native.SetForegroundWindow(Handle);
             var focusDeadline = Environment.TickCount64 + 60000;
             while (Native.GetForegroundWindow() != Handle && Environment.TickCount64 < focusDeadline)
@@ -44,15 +45,29 @@ internal sealed class SmokeTests : Form
                 var completion = new TaskCompletionSource<EnhancementResult>();
                 hotkeyAction = async () =>
                 {
-                    try { completion.SetResult(await new SelectionEnhancer(guard, clipboardTrace.Add).RunAsync(async (text, token) => { SelfTests.Assert(text == "优化这段代码", "wrong selection"); await Task.Delay(100, token); return "请优化这段代码，保持现有行为。"; }, _ => { }, default)); }
+                    try { completion.SetResult(await new SelectionEnhancer(guard, clipboardTrace.Add).RunAsync(async (text, token) => { SelfTests.Assert(text == "优化这段代码", "wrong selection"); await Task.Delay(100, token); return "请优化这段代码，保持现有行为。"; }, clipboardTrace.Add, default)); }
                     catch (Exception e) { completion.SetException(e); }
                 };
                 Native.Chord(0x11, 0x12, 0x39);
                 var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
-                SelfTests.Assert(result.Replaced && editor.Text == "前缀 请优化这段代码，保持现有行为。 后缀", "wrong replacement");
+                SelfTests.Assert(result.Replaced && editor.Text == "前缀 请优化这段代码，保持现有行为。 后缀", $"wrong replacement (Replaced={result.Replaced}, synthetic editor={editor.Text})");
                 SelfTests.Assert(Clipboard.GetText() == "clipboard-before-test", "clipboard not restored");
                 editor.Undo();
                 SelfTests.Assert(editor.Text == "前缀 优化这段代码 后缀", "undo failed");
+            });
+            await Check("a missed first copy shortcut is retried without losing the selection or clipboard", async () =>
+            {
+                await Prepare();
+                Clipboard.SetText("retry-copy-clipboard");
+                editor.IgnoreCopies = 1;
+                var result = await new SelectionEnhancer(guard, clipboardTrace.Add).RunAsync((text, _) =>
+                {
+                    SelfTests.Assert(text == "优化这段代码", "copy retry read the wrong selection");
+                    return Task.FromResult("复制重试后的增强结果");
+                }, _ => { }, default);
+                SelfTests.Assert(editor.IgnoreCopies == 0 && clipboardTrace.Contains("copy shortcut missed: retrying") && result.Replaced
+                    && editor.Text == "前缀 复制重试后的增强结果 后缀"
+                    && Clipboard.GetText() == "retry-copy-clipboard", "copy retry lost source or clipboard");
             });
             await Check("changed selection retains result without replacing", async () =>
             {
@@ -145,7 +160,16 @@ internal sealed class SmokeTests : Form
     private async Task Prepare()
     {
         Show(); WindowState = FormWindowState.Normal; Activate(); Native.SetForegroundWindow(Handle);
+        // Closing the login-test windows restores focus asynchronously on Windows.
+        // Establish the test precondition before exercising production focus guards.
+        var focusDeadline = Environment.TickCount64 + 2500;
+        while (Native.GetForegroundWindow() != Handle && Environment.TickCount64 < focusDeadline)
+        {
+            await Task.Delay(100);
+            Activate(); Native.SetForegroundWindow(Handle);
+        }
         SelfTests.Assert(editor.Focus(), "test setup could not focus the editor");
+        editor.IgnoreCopies = 0;
         editor.Text = "前缀 优化这段代码 后缀"; editor.Select(3, "优化这段代码".Length);
         await Task.Delay(220);
         SelfTests.Assert(Native.GetForegroundWindow() == Handle, "test window not in foreground");
@@ -155,5 +179,21 @@ internal sealed class SmokeTests : Form
         clipboardTrace.Clear();
         try { await test(); results.Add(new { name, passed = true, error = "" }); }
         catch (Exception e) { results.Add(new { name, passed = false, error = e + "\n" + string.Join("; ", clipboardTrace) }); Environment.ExitCode = 1; }
+    }
+
+    private sealed class CopyTestEditor : RichTextBox
+    {
+        internal int IgnoreCopies { get; set; }
+        private bool ignoreCopyCharacter;
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == 0x100 && (int)message.WParam == 0x43) ignoreCopyCharacter = false;
+            if (message.Msg == 0x102 && (int)message.WParam == 3 && ignoreCopyCharacter)
+            { ignoreCopyCharacter = false; return; }
+            if (IgnoreCopies > 0 && (message.Msg == 0x301
+                || message.Msg == 0x100 && (int)message.WParam == 0x43 && (ModifierKeys & Keys.Control) != 0))
+            { IgnoreCopies--; ignoreCopyCharacter = true; return; }
+            base.WndProc(ref message);
+        }
     }
 }

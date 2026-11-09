@@ -99,8 +99,8 @@ internal sealed class MainForm : Form
         tabs.TabPages.AddRange([start, result]); columns.Controls.Add(tabs, 1, 0);
         var intro = new Label
         {
-            Dock = DockStyle.Top, Height = 290,
-            Text = "01  在 Codex 或 Harness 官方桌面版本机聊天中选中文字\n\n02  按快捷键，自动读取上下文并增强\n\n03  增强结果自动替换原选区，可用 Ctrl+Z 撤销\n\n默认开启自动上下文。只有当前聊天唯一匹配时才会请求模型。内置示例框可以直接体验基础增强。\n\n等待期间保持原来的选区。若你切换窗口、点击或继续输入，结果会保留在“最近结果”。\n\n最小化保留任务栏；关闭后在托盘运行，双击图标恢复。"
+            Dock = DockStyle.Top, Height = 330,
+            Text = "01  在 Codex 或 Harness 官方桌面版本机聊天中选中文字\n\n02  按快捷键，自动读取上下文并增强\n\n03  增强结果自动替换原选区，可用 Ctrl+Z 撤销\n\n默认开启自动上下文。Codex 历史无法核对时，仅增强选中文字，提示“本次未使用历史”。内置示例框也可体验基础增强。\n\n等待期间保持原来的选区。若你切换窗口、点击或继续输入，结果会保留在“最近结果”。\n\n最小化保留任务栏；关闭后在托盘运行，双击图标恢复。"
         };
         var sandbox = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, Text = "帮我排查登录接口偶尔返回 500 的问题，先看看项目现有代码，别改接口返回格式。" };
         var sandboxCaption = new Label { Text = "试一试：选中下面的文字，再按快捷键", Dock = DockStyle.Top, Height = 32, ForeColor = accent };
@@ -368,7 +368,8 @@ internal sealed class MainForm : Form
                     SetStatus("正在自动定位当前聊天…");
                     context = await ContextWorker.ResolveAsync(targetWindow, token, composer);
                     if (!guard.Matches(targetWindow, targetEpoch)) throw new InvalidOperationException("输入位置已变化，已停止本次请求。");
-                    SetStatus(context.IsNewChat ? "Codex 新聊天 · 暂无历史，仅增强选中文字…"
+                    SetStatus(context.HistoryUnavailable ? "本次未使用历史 · 仅增强选中文字…"
+                        : context.IsNewChat ? "Codex 新聊天 · 暂无历史，仅增强选中文字…"
                         : $"{context.ProviderName} · 已结合 {context.Messages.Count} 条历史消息，正在增强…");
                 }
                 if (!EnsureLoggedIn()) throw new InvalidOperationException("登录已到期，请重新登录。原文未替换。");
@@ -379,8 +380,10 @@ internal sealed class MainForm : Form
                 return EnsureLoggedIn() && context != null && context.SameConversation(current);
             } : _ => Task.FromResult(EnsureLoggedIn()));
             original.Text = result.Original; enhanced.Text = result.Enhanced;
-            resultInfo.Text = context == null ? "原文 · 未使用聊天上下文" : context.IsNewChat ? "原文 · Codex 新聊天，暂无历史" : $"原文 · 已结合 {context.Messages.Count} 条历史消息";
-            var contextSummary = context == null ? "未使用上下文" : context.IsNewChat ? "Codex 新聊天 · 仅增强选中文字" : $"{context.ProviderName} · 已使用 {context.Messages.Count} 条上下文";
+            resultInfo.Text = context == null ? "原文 · 未使用聊天上下文" : context.HistoryUnavailable ? "原文 · 本次未使用历史，仅增强选中文字"
+                : context.IsNewChat ? "原文 · Codex 新聊天，暂无历史" : $"原文 · 已结合 {context.Messages.Count} 条历史消息";
+            var contextSummary = context == null ? "未使用上下文" : context.HistoryUnavailable ? "本次未使用历史"
+                : context.IsNewChat ? "Codex 新聊天 · 仅增强选中文字" : $"{context.ProviderName} · 已使用 {context.Messages.Count} 条上下文";
             SetStatus(result.Replaced ? $"{contextSummary} · 已替换 · Ctrl+Z 可撤销" : $"{contextSummary} · 输入位置已变化，结果已保留");
             Notify(result.Replaced ? "提示词已增强" : "增强完成，未自动替换", result.Replaced ? "已粘贴回原选区，没有发送消息。" : "你在等待期间改变了输入位置。点击此提示查看结果。");
         }

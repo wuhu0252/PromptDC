@@ -50,7 +50,7 @@ internal sealed class DeepSeekClient(HttpClient http)
         var key = settings.GetKey().Trim();
         if (key.Length == 0) throw new InvalidOperationException("请先登录服务商。");
         var messages = new List<object> { new { role = "system", content = SystemPrompt(settings.Mode, settings.Instructions) } };
-        if (context is { IsNewChat: false })
+        if (context is { IsNewChat: false, HistoryUnavailable: false })
         {
             messages.Add(new { role = "user", content = JsonSerializer.Serialize(new
             {

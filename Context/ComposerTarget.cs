@@ -65,7 +65,7 @@ internal sealed record ComposerTarget(AutomationElement Scope, string Identity, 
             var body = -1; var scope = -1;
             for (var i = 1; i < chain.Count; i++)
             {
-                if (body < 0 && chain[i].Split(' ').Any(token => token.StartsWith("_ComposerLayoutBody_", StringComparison.Ordinal))) body = i;
+                if (body < 0 && IsCodexComposerBody(chain[i])) body = i;
                 if (HasClass(chain[i], CodexScope) || HasClass(chain[i], CodexNewChatScope)) { scope = i; break; }
             }
             return body >= 0 && scope > body && chain.Count(c => HasClass(c, CodexScope) || HasClass(c, CodexNewChatScope)) == 1;
@@ -78,5 +78,13 @@ internal sealed record ComposerTarget(AutomationElement Scope, string Identity, 
 
     internal static bool HasClass(string classes, string token) => classes.Split(' ', StringSplitOptions.RemoveEmptyEntries)
         .Contains(token, StringComparer.Ordinal);
+
+    // Codex 26.1103 changed CSS-module names from _Component_hash to Component-hash.
+    // Match the component boundary, not a particular build's hash or any ProseMirror
+    // in the window: the unified desktop also contains unrelated request-card editors.
+    private static bool IsCodexComposerBody(string classes) => classes.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+        .Any(token => HasSuffix(token, "_ComposerLayoutBody_") || HasSuffix(token, "ComposerLayoutBody-"));
+    private static bool HasSuffix(string token, string prefix) => token.Length > prefix.Length
+        && token.StartsWith(prefix, StringComparison.Ordinal);
     private static InvalidOperationException Fail() => new("请先在 Codex 或 Harness 的聊天输入框内选中文字并保持焦点；无法确定当前聊天输入框，原文未替换。");
 }

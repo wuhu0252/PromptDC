@@ -70,12 +70,24 @@ internal sealed class SelectionEnhancer(InputGuard guard, Action<string>? trace 
         {
             Native.Chord(0x11, 0x43);
             var deadline = Environment.TickCount64 + 1200;
+            var nextCopy = Environment.TickCount64 + 350;
             while (Environment.TickCount64 < deadline)
             {
                 await Task.Delay(25, token);
                 if (!guard.Matches(window, epoch)) throw new InvalidOperationException("输入位置已变化。");
                 var current = Native.GetClipboardSequenceNumber();
-                if (current == markerSequence) continue;
+                if (current == markerSequence)
+                {
+                    // A busy editor can miss the first copy shortcut. Retry only while
+                    // our marker still owns the clipboard and the original input is intact.
+                    if (Environment.TickCount64 >= nextCopy && !Native.ModifiersPressed)
+                    {
+                        trace?.Invoke("copy shortcut missed: retrying");
+                        Native.Chord(0x11, 0x43);
+                        nextCopy = Environment.TickCount64 + 350;
+                    }
+                    continue;
+                }
                 ownedSequence = current;
                 try
                 {

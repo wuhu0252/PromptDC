@@ -75,6 +75,7 @@ internal static class SelfTests
         LoginTests.Register(Check);
         Check("DeepSeek keeps history as data and only rewrites the last user message", () => ContextApiTest().GetAwaiter().GetResult());
         Check("verified new-chat draft sends only selected text and no stored project history", () => NewChatApiTest().GetAwaiter().GetResult());
+        Check("unavailable history sends only the selected text, without context or a guessed workspace", () => UnavailableHistoryApiTest().GetAwaiter().GetResult());
         ContextTests.Register(Check);
         HarnessTests.Register(Check);
         WindowAndPathTests.Register(Check);
@@ -149,6 +150,19 @@ internal static class SelfTests
         Assert(result == "增强后的首条需求" && messages.GetArrayLength() == 2
             && messages[1].GetProperty("content").GetString() == "帮项目加个图标"
             && !handler.Body!.Contains("must-not-be-sent") && !handler.Body.Contains("codex-draft:"), "draft acquired unrelated context");
+    }
+    private static async Task UnavailableHistoryApiTest()
+    {
+        var handler = new StubHandler(200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"增强结果\"}}]}");
+        using var http = new HttpClient(handler);
+        var context = new ChatContext("ui-only:fingerprint", "must-not-be-sent", "must-not-be-sent",
+            [new("assistant", "must-not-be-sent")], "must-not-be-sent") { HistoryUnavailable = true };
+        var result = await new DeepSeekClient(http).EnhanceAsync("帮我生成 agents.md", TestSettings(), default, context);
+        using var body = JsonDocument.Parse(handler.Body!);
+        var messages = body.RootElement.GetProperty("messages");
+        Assert(result == "增强结果" && messages.GetArrayLength() == 2
+            && messages[1].GetProperty("content").GetString() == "帮我生成 agents.md"
+            && !handler.Body!.Contains("must-not-be-sent") && !handler.Body.Contains("ui-only:"), "unverified history was sent");
     }
     internal static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     internal static void WriteReport(string name, object results)
